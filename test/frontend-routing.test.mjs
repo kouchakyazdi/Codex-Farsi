@@ -176,6 +176,9 @@ async function createHarness(t, {
         getItem(key) {
           return values.get(key) ?? null;
         },
+        removeItem(key) {
+          values.delete(key);
+        },
         setItem(key, value) {
           values.set(key, String(value));
         },
@@ -795,7 +798,10 @@ test("composer uses a neon palette frame and neutral ChatGPT-like stop control",
   const placeholder =
     styles.match(/\.composer textarea:placeholder-shown\s*\{(?<body>[^}]*)\}/)?.groups?.body || "";
 
-  assert.match(index, /class="context-chip-icon" data-icon="settings"/);
+  // The composer chip picks the project now; settings stays in the topbar.
+  assert.match(index, /class="context-chip-icon" data-icon="project"/);
+  assert.match(index, /id="project-chip"[^>]*aria-haspopup="listbox"/);
+  assert.doesNotMatch(index, /data-icon="settings"/);
   assert.match(index, /id="stop-turn"[^>]*>[\s\S]*?<rect[^>]+rx="1\.5"/);
   assert.match(index, /id="composer-tools"[^>]*>[\s\S]*?<path d="M12 5v14M5 12h14"/);
   assert.match(index, /<strong>Goal mode<\/strong>/);
@@ -829,6 +835,24 @@ test("composer accepts files and exposes a clear drag-and-drop state", async () 
   assert.match(index, /id="composer-drop-overlay"[\s\S]*?فایل‌ها را اینجا رها کنید/);
   assert.match(styles, /\.composer-drop-overlay\s*\{[^}]*position:\s*absolute/s);
   assert.match(styles, /\.composer\.drop-active\s*\{[^}]*--accent-rgb/s);
+});
+
+test("grid lists constrain their track so long titles ellipsize", async () => {
+  const styles = await readFile(STYLES, "utf8");
+  // A grid item's automatic minimum size is its content, so without this the
+  // row grows past the sidebar and the list clips the title instead.
+  for (const selector of [".thread-pinned", ".project-switcher-options"]) {
+    const rule = styles.match(
+      new RegExp(`\\${selector}\\s*\\{(?<body>[^}]*)\\}`),
+    )?.groups?.body;
+    assert.ok(rule, `${selector} rule is missing`);
+    assert.match(rule, /display:\s*grid/);
+    assert.match(
+      rule,
+      /grid-template-columns:\s*minmax\(0, 1fr\)/,
+      `${selector} must allow its track to shrink`,
+    );
+  }
 });
 
 test("failed technical activity chips stay visually neutral", async () => {
@@ -993,14 +1017,11 @@ test(
         "plan",
         "compact",
         "new",
-        "clear",
         "resume",
         "status",
         "usage",
         "model",
         "permissions",
-        "settings",
-        "help",
       ],
     );
 
@@ -1618,7 +1639,9 @@ test(
       "new project was not selected",
     );
     assert.match(document.querySelector("#welcome-title").textContent, /وب‌اپ/);
-    assert.equal(document.querySelector("#cwd-label").title, "/workspace/web-app");
+    // The composer chip now names the project and keeps the folder in its title.
+    assert.equal(document.querySelector("#project-chip-label").textContent, "وب‌اپ");
+    assert.match(document.querySelector("#project-chip").title, /\/workspace\/web-app/);
 
     typePrompt(window, "پروژه را بررسی کن");
     document.querySelector("#send-message").click();
@@ -1860,6 +1883,1176 @@ test(
     assert.match(document.querySelector("#usage-dialog").textContent, /بازهٔ ۱ هفته‌ای/);
     document.querySelector("#usage-close").click();
     assert.equal(document.querySelector("#usage-dialog").open, false);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  },
+);
+
+test(
+  "the project switcher groups conversations by folder and browses without starting a chat",
+  { concurrency: false },
+  async (t) => {
+    const now = Math.floor(Date.now() / 1000);
+    const rpcRequests = [];
+    const threads = [
+      {
+        id: "api-1",
+        name: "رفع باگ احراز هویت",
+        cwd: "/workspace/api",
+        provider: "codex",
+        createdAt: now,
+        updatedAt: now,
+        status: { type: "idle" },
+      },
+      {
+        id: "api-2",
+        name: "اضافه‌کردن ایندکس",
+        cwd: "/workspace/api/db",
+        provider: "codex",
+        createdAt: now,
+        updatedAt: now - 60,
+        status: { type: "idle" },
+      },
+      {
+        id: "web-1",
+        name: "بازطراحی هدر",
+        cwd: "/workspace/web",
+        provider: "claude",
+        createdAt: now,
+        updatedAt: now - 120,
+        status: { type: "idle" },
+      },
+    ];
+    const projects = [
+      { id: "p-api", name: "api", cwd: "/workspace/api", instructions: "" },
+      { id: "p-web", name: "web", cwd: "/workspace/web", instructions: "" },
+    ];
+    const fetchHandler = async (path, options = {}) => {
+      if (path === "/api/status") return jsonResponse({ ready: true, cwd: "/workspace" });
+      if (path === "/api/projects") {
+        // Nothing is assigned by hand: grouping must come from cwd alone.
+        return jsonResponse({ projects, threadProjects: {} });
+      }
+      if (path !== "/api/rpc") throw new Error(`Unexpected request: ${path}`);
+      const request = JSON.parse(options.body);
+      rpcRequests.push(request);
+      if (request.method === "model/list") return jsonResponse({ result: { data: [] } });
+      if (request.method === "collaborationMode/list") {
+        return jsonResponse({ result: { data: [] } });
+      }
+      if (request.method === "thread/list") {
+        return jsonResponse({ result: { data: threads, nextCursor: null } });
+      }
+      throw new Error(`Unexpected RPC method: ${request.method}`);
+    };
+
+    const { window } = await createHarness(t, { fetchHandler });
+    const document = window.document;
+    const allIds = () =>
+      [...document.querySelectorAll("#thread-list [data-thread-id]")].map(
+        (item) => item.dataset.threadId,
+      );
+    const listedIds = () =>
+      [...document.querySelectorAll("#thread-list [data-thread-id]")]
+        .filter((item) => !item.closest(".thread-pinned"))
+        .map((item) => item.dataset.threadId);
+    const pinnedIds = () =>
+      [...document.querySelectorAll(".thread-pinned [data-thread-id]")].map(
+        (item) => item.dataset.threadId,
+      );
+
+    await waitFor(() => allIds().length === 3, "threads were not listed");
+    // With no project selected every conversation is already listed below.
+    assert.deepEqual(pinnedIds(), []);
+
+    // The switcher counts conversations per project using cwd matching.
+    const apiOption = document.querySelector("[data-project-id='p-api']");
+    assert.equal(apiOption.querySelector(".project-item-count").textContent, "۲");
+    assert.equal(
+      document.querySelector("[data-project-id='p-web'] .project-item-count").textContent,
+      "۱",
+    );
+
+    apiOption.click();
+    await waitFor(
+      () => listedIds().length === 2,
+      "selecting a project did not filter the conversation list",
+    );
+    // A nested folder still belongs to its closest parent project.
+    assert.deepEqual(listedIds(), ["api-1", "api-2"]);
+    // The other project's conversation stays reachable from the board above.
+    assert.deepEqual(pinnedIds(), ["web-1"]);
+    assert.equal(document.querySelector("#project-switcher-name").textContent.trim(), "api");
+
+    // Browsing a project must not create a conversation.
+    assert.equal(
+      rpcRequests.some((request) => request.method === "thread/start"),
+      false,
+      "switching projects should not start a chat",
+    );
+
+    document.querySelector("[data-project-id='p-web']").click();
+    await waitFor(
+      () => listedIds().join() === "web-1",
+      "switching to the other project did not update the list",
+    );
+
+    document.querySelector("[data-project-id='']").click();
+    await waitFor(() => listedIds().length === 3, "«همهٔ گفتگوها» did not clear the filter");
+    assert.deepEqual(pinnedIds(), [], "nothing should be pinned when everything is listed");
+    assert.equal(
+      rpcRequests.some((request) => request.method === "thread/start"),
+      false,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  },
+);
+
+test(
+  "an explicit project assignment overrides folder matching",
+  { concurrency: false },
+  async (t) => {
+    const now = Math.floor(Date.now() / 1000);
+    const threads = [
+      {
+        id: "pinned",
+        name: "گفتگوی منتسب",
+        cwd: "/workspace/api",
+        provider: "codex",
+        createdAt: now,
+        updatedAt: now,
+        status: { type: "idle" },
+      },
+    ];
+    const fetchHandler = async (path, options = {}) => {
+      if (path === "/api/status") return jsonResponse({ ready: true, cwd: "/workspace" });
+      if (path === "/api/projects") {
+        return jsonResponse({
+          projects: [
+            { id: "p-api", name: "api", cwd: "/workspace/api", instructions: "" },
+            { id: "p-web", name: "web", cwd: "/workspace/web", instructions: "" },
+          ],
+          threadProjects: { pinned: "p-web" },
+        });
+      }
+      if (path !== "/api/rpc") throw new Error(`Unexpected request: ${path}`);
+      const request = JSON.parse(options.body);
+      if (request.method === "model/list") return jsonResponse({ result: { data: [] } });
+      if (request.method === "collaborationMode/list") {
+        return jsonResponse({ result: { data: [] } });
+      }
+      if (request.method === "thread/list") {
+        return jsonResponse({ result: { data: threads, nextCursor: null } });
+      }
+      throw new Error(`Unexpected RPC method: ${request.method}`);
+    };
+
+    const { window } = await createHarness(t, { fetchHandler });
+    const document = window.document;
+    const listedIds = () =>
+      [...document.querySelectorAll("#thread-list [data-thread-id]")]
+        .filter((item) => !item.closest(".thread-pinned"))
+        .map((item) => item.dataset.threadId);
+
+    await waitFor(() => listedIds().length === 1, "thread was not listed");
+    await waitFor(
+      () =>
+        document.querySelector("[data-project-id='p-web'] .project-item-count")
+          ?.textContent === "۱",
+      "explicit assignment was not counted under the assigned project",
+    );
+    assert.equal(
+      document.querySelector("[data-project-id='p-api'] .project-item-count").textContent,
+      "۰",
+      "the cwd-matched project should lose to the explicit assignment",
+    );
+
+    document.querySelector("[data-project-id='p-api']").click();
+    await waitFor(
+      () => listedIds().length === 0,
+      "the thread should not appear under the cwd-matched project",
+    );
+    assert.deepEqual(
+      [...document.querySelectorAll(".thread-pinned [data-thread-id]")].map(
+        (item) => item.dataset.threadId,
+      ),
+      ["pinned"],
+      "it should still be reachable from the board above",
+    );
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  },
+);
+
+test(
+  "a conversation read in another project stays reachable after switching away",
+  { concurrency: false },
+  async (t) => {
+    const now = Math.floor(Date.now() / 1000);
+    const threads = [
+      {
+        id: "web-old",
+        name: "بررسی migration",
+        cwd: "/workspace/web",
+        provider: "codex",
+        createdAt: now - 400_000,
+        // Deliberately stale: recency must come from opening it, not updatedAt.
+        updatedAt: now - 400_000,
+        status: { type: "idle" },
+      },
+      {
+        id: "api-1",
+        name: "رفع باگ احراز هویت",
+        cwd: "/workspace/api",
+        provider: "codex",
+        createdAt: now,
+        updatedAt: now,
+        status: { type: "idle" },
+      },
+    ];
+    const fetchHandler = async (path, options = {}) => {
+      if (path === "/api/status") return jsonResponse({ ready: true, cwd: "/workspace" });
+      if (path === "/api/projects") {
+        return jsonResponse({
+          projects: [
+            { id: "p-api", name: "api", cwd: "/workspace/api", instructions: "" },
+            { id: "p-web", name: "web", cwd: "/workspace/web", instructions: "" },
+          ],
+          threadProjects: {},
+        });
+      }
+      if (path !== "/api/rpc") throw new Error(`Unexpected request: ${path}`);
+      const request = JSON.parse(options.body);
+      if (request.method === "model/list") return jsonResponse({ result: { data: [] } });
+      if (request.method === "collaborationMode/list") {
+        return jsonResponse({ result: { data: [] } });
+      }
+      if (request.method === "thread/list") {
+        return jsonResponse({ result: { data: threads, nextCursor: null } });
+      }
+      if (request.method === "thread/resume") {
+        const thread = threads.find((item) => item.id === request.params.threadId);
+        return jsonResponse({ result: { thread: { ...thread, turns: [] }, cwd: thread.cwd } });
+      }
+      throw new Error(`Unexpected RPC method: ${request.method}`);
+    };
+
+    const { window } = await createHarness(t, { fetchHandler });
+    const document = window.document;
+    const pinnedIds = () =>
+      [...document.querySelectorAll(".thread-pinned [data-thread-id]")].map(
+        (item) => item.dataset.threadId,
+      );
+
+    await waitFor(
+      () => document.querySelectorAll("#thread-list [data-thread-id]").length === 2,
+      "threads were not listed",
+    );
+
+    // Read the stale conversation from the web project, then move to api.
+    document.querySelector("[data-thread-id='web-old']").click();
+    await waitFor(
+      () => window.localStorage.getItem("codex-web-last-opened")?.includes("web-old"),
+      "opening a conversation was not recorded",
+    );
+    document.querySelector("#project-switcher").click();
+    document.querySelector("[data-project-id='p-api']").click();
+
+    await waitFor(
+      () => pinnedIds().includes("web-old"),
+      "the conversation just read in another project disappeared",
+    );
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  },
+);
+
+test(
+  "the composer chip assigns a project to a draft and to an existing conversation",
+  { concurrency: false },
+  async (t) => {
+    const now = Math.floor(Date.now() / 1000);
+    const assignments = [];
+    const rpcRequests = [];
+    const fetchHandler = async (path, options = {}) => {
+      if (path === "/api/status") return jsonResponse({ ready: true, cwd: "/workspace" });
+      if (path === "/api/projects") {
+        return jsonResponse({
+          projects: [
+            {
+              id: "p-api",
+              name: "api",
+              cwd: "/workspace/api",
+              instructions: "قبل از پایان تست‌ها را اجرا کن.",
+            },
+            { id: "p-web", name: "web", cwd: "/workspace/web", instructions: "" },
+          ],
+          threadProjects: {},
+        });
+      }
+      if (path === "/api/project-threads") {
+        assignments.push(JSON.parse(options.body));
+        return jsonResponse(assignments.at(-1));
+      }
+      if (path !== "/api/rpc") throw new Error(`Unexpected request: ${path}`);
+      const request = JSON.parse(options.body);
+      rpcRequests.push(request);
+      if (request.method === "model/list") return jsonResponse({ result: { data: [] } });
+      if (request.method === "collaborationMode/list") {
+        return jsonResponse({ result: { data: [] } });
+      }
+      if (request.method === "thread/list") {
+        return jsonResponse({ result: { data: [], nextCursor: null } });
+      }
+      if (request.method === "thread/start") {
+        return jsonResponse({
+          result: {
+            thread: {
+              id: "chip-thread",
+              cwd: request.params.cwd,
+              createdAt: now,
+              updatedAt: now,
+              status: { type: "idle" },
+              turns: [],
+            },
+            cwd: request.params.cwd,
+          },
+        });
+      }
+      if (request.method === "turn/start") {
+        return jsonResponse({ result: { turn: { id: "turn-chip", status: "inProgress" } } });
+      }
+      throw new Error(`Unexpected RPC method: ${request.method}`);
+    };
+
+    const { window } = await createHarness(t, { fetchHandler });
+    const document = window.document;
+    const chipLabel = () => document.querySelector("#project-chip-label").textContent;
+
+    await waitFor(
+      () => document.querySelector("#project-chip-list [data-project-id='p-api']"),
+      "the chip menu was not populated",
+    );
+    // Rows in assign mode expose the folder, which filter mode does not need.
+    assert.equal(
+      document.querySelector("#project-chip-list [data-project-id='p-api'] .project-item-cwd")
+        .textContent,
+      "/workspace/api",
+    );
+
+    document.querySelector("#project-chip").click();
+    assert.equal(
+      document.querySelector("#project-chip-menu").classList.contains("hidden"),
+      false,
+      "clicking the chip did not open the menu",
+    );
+
+    document.querySelector("#project-chip-list [data-project-id='p-api']").click();
+    // The label must update immediately, not only after the thread exists.
+    await waitFor(() => chipLabel() === "api", "the chip label did not follow the assignment");
+    assert.equal(
+      document.querySelector("#project-chip-menu").classList.contains("hidden"),
+      true,
+      "picking a project should close the menu",
+    );
+    // Assigning a draft is local; nothing is persisted until the thread exists.
+    assert.deepEqual(assignments, []);
+
+    typePrompt(window, "بررسی کن");
+    document.querySelector("#send-message").click();
+    await waitFor(() => assignments.length === 1, "the new thread was not assigned");
+    const start = rpcRequests.find((request) => request.method === "thread/start");
+    assert.equal(start.params.cwd, "/workspace/api");
+    assert.match(start.params.developerInstructions, /قبل از پایان تست‌ها/);
+    assert.deepEqual(assignments[0], { threadId: "chip-thread", projectId: "p-api" });
+
+    // Re-assigning an existing conversation goes straight to the server.
+    document.querySelector("#project-chip").click();
+    document.querySelector("#project-chip-list [data-project-id='p-web']").click();
+    await waitFor(() => assignments.length === 2, "re-assignment was not persisted");
+    assert.deepEqual(assignments[1], { threadId: "chip-thread", projectId: "p-web" });
+    await waitFor(() => chipLabel() === "web", "the chip did not follow the re-assignment");
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  },
+);
+
+test(
+  "picking a project from the composer does not move the sidebar filter",
+  { concurrency: false },
+  async (t) => {
+    const now = Math.floor(Date.now() / 1000);
+    const threads = [
+      {
+        id: "web-1",
+        name: "بازطراحی هدر",
+        cwd: "/workspace/web",
+        provider: "codex",
+        createdAt: now,
+        updatedAt: now,
+        status: { type: "idle" },
+      },
+    ];
+    const fetchHandler = async (path, options = {}) => {
+      if (path === "/api/status") return jsonResponse({ ready: true, cwd: "/workspace" });
+      if (path === "/api/projects") {
+        return jsonResponse({
+          projects: [
+            { id: "p-api", name: "api", cwd: "/workspace/api", instructions: "" },
+            { id: "p-web", name: "web", cwd: "/workspace/web", instructions: "" },
+          ],
+          threadProjects: {},
+        });
+      }
+      if (path !== "/api/rpc") throw new Error(`Unexpected request: ${path}`);
+      const request = JSON.parse(options.body);
+      if (request.method === "model/list") return jsonResponse({ result: { data: [] } });
+      if (request.method === "collaborationMode/list") {
+        return jsonResponse({ result: { data: [] } });
+      }
+      if (request.method === "thread/list") {
+        return jsonResponse({ result: { data: threads, nextCursor: null } });
+      }
+      throw new Error(`Unexpected RPC method: ${request.method}`);
+    };
+
+    const { window } = await createHarness(t, { fetchHandler });
+    const document = window.document;
+
+    await waitFor(
+      () => document.querySelector("#project-chip-list [data-project-id='p-api']"),
+      "the chip menu was not populated",
+    );
+    // Browsing is scoped to web; the next chat is going to run in api.
+    document.querySelector("#project-switcher").click();
+    document.querySelector("#project-list [data-project-id='p-web']").click();
+    await waitFor(
+      () => document.querySelector("#project-switcher-name").textContent.trim() === "web",
+      "the sidebar filter did not move",
+    );
+
+    document.querySelector("#project-chip").click();
+    document.querySelector("#project-chip-list [data-project-id='p-api']").click();
+    await waitFor(
+      () => document.querySelector("#project-chip-label").textContent === "api",
+      "the chip did not take the assignment",
+    );
+    assert.equal(
+      document.querySelector("#project-switcher-name").textContent.trim(),
+      "web",
+      "assigning a chat must not change what the sidebar is browsing",
+    );
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  },
+);
+
+test(
+  "the composer chip switches model and reasoning effort",
+  { concurrency: false },
+  async (t) => {
+    const rpcRequests = [];
+    const fetchHandler = async (path, options = {}) => {
+      if (path === "/api/status") return jsonResponse({ ready: true, cwd: "/workspace" });
+      if (path === "/api/projects") {
+        return jsonResponse({ projects: [], threadProjects: {} });
+      }
+      if (path !== "/api/rpc") throw new Error(`Unexpected request: ${path}`);
+      const request = JSON.parse(options.body);
+      rpcRequests.push(request);
+      if (request.method === "model/list") {
+        return jsonResponse({
+          result: {
+            data: [
+              {
+                id: "gpt-5-codex",
+                model: "gpt-5-codex",
+                displayName: "GPT-5 Codex",
+                isDefault: true,
+                // Codex reports each level as an object, not a bare string.
+                supportedReasoningEfforts: [
+                  { reasoningEffort: "low", description: "Fast responses" },
+                  { reasoningEffort: "medium", description: "Balanced" },
+                  { reasoningEffort: "high", description: "Deeper reasoning" },
+                ],
+                defaultReasoningEffort: "low",
+              },
+              { id: "gpt-5", model: "gpt-5", displayName: "GPT-5" },
+            ],
+          },
+        });
+      }
+      if (request.method === "collaborationMode/list") {
+        return jsonResponse({ result: { data: [] } });
+      }
+      if (request.method === "thread/list") {
+        return jsonResponse({ result: { data: [], nextCursor: null } });
+      }
+      throw new Error(`Unexpected RPC method: ${request.method}`);
+    };
+
+    const { window } = await createHarness(t, { fetchHandler });
+    const document = window.document;
+    const label = () => document.querySelector("#model-label").textContent;
+    const efforts = () =>
+      [...document.querySelectorAll("#effort-options [data-effort-value]")].map(
+        (option) => option.dataset.effortValue,
+      );
+
+    document.querySelector("#model-chip").click();
+    await waitFor(
+      () => document.querySelector("#model-options [data-model-value='gpt-5']"),
+      "the model menu was not populated",
+    );
+    assert.equal(
+      document.querySelector("#run-chip-menu").classList.contains("hidden"),
+      false,
+    );
+
+    document.querySelector("#model-options [data-model-value='gpt-5']").click();
+    await waitFor(() => label() === "GPT-5", "the chip did not follow the model change");
+    assert.equal(
+      JSON.parse(window.localStorage.getItem("codex-web-settings")).modelByProvider.codex,
+      "gpt-5",
+      "the model choice was not persisted",
+    );
+
+    document.querySelector("#model-chip").click();
+    document.querySelector("#effort-options [data-effort-value='high']").click();
+    await waitFor(
+      () => label() === "GPT-5 · High",
+      "the chip did not show the chosen effort",
+    );
+    assert.equal(
+      JSON.parse(window.localStorage.getItem("codex-web-settings")).effort,
+      "high",
+    );
+
+    // A model that declares its supported efforts must not offer the others.
+    document.querySelector("#model-chip").click();
+    document.querySelector("#model-options [data-model-value='gpt-5-codex']").click();
+    document.querySelector("#model-chip").click();
+    await waitFor(
+      () => efforts().length === 4,
+      `expected only the declared efforts, got ${efforts().join()}`,
+    );
+    assert.deepEqual(efforts(), ["", "low", "medium", "high"]);
+    // The description from the API is worth surfacing.
+    assert.equal(
+      document.querySelector("#effort-options [data-effort-value='medium']").title,
+      "Balanced",
+    );
+    // The default level the model reports is named on the fallback option.
+    assert.match(
+      document.querySelector("#effort-options [data-effort-value='']").textContent,
+      /Low/,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  },
+);
+
+test(
+  "the composer chip switches provider and reloads that provider's models",
+  { concurrency: false },
+  async (t) => {
+    const modelRequests = [];
+    const fetchHandler = async (path, options = {}) => {
+      if (path === "/api/status") return jsonResponse({ ready: true, cwd: "/workspace" });
+      if (path === "/api/projects") {
+        return jsonResponse({ projects: [], threadProjects: {} });
+      }
+      if (path !== "/api/rpc") throw new Error(`Unexpected request: ${path}`);
+      const request = JSON.parse(options.body);
+      if (request.method === "model/list") {
+        modelRequests.push(request.params.provider);
+        return jsonResponse({
+          result: {
+            data:
+              request.params.provider === "claude"
+                ? [{ id: "sonnet", model: "sonnet", displayName: "Claude Sonnet" }]
+                : [{ id: "gpt-5", model: "gpt-5", displayName: "GPT-5" }],
+          },
+        });
+      }
+      if (request.method === "collaborationMode/list") {
+        return jsonResponse({ result: { data: [] } });
+      }
+      if (request.method === "thread/list") {
+        return jsonResponse({ result: { data: [], nextCursor: null } });
+      }
+      throw new Error(`Unexpected RPC method: ${request.method}`);
+    };
+
+    const { window } = await createHarness(t, { fetchHandler });
+    const document = window.document;
+
+    document.querySelector("#model-chip").click();
+    await waitFor(
+      () => document.querySelector("#provider-options [data-provider-value='claude']"),
+      "the provider options were not rendered",
+    );
+    assert.equal(
+      document
+        .querySelector("#provider-options [data-provider-value='codex']")
+        .classList.contains("active"),
+      true,
+      "Codex should start selected",
+    );
+    // No conversation is open, so the new-chat caveat is not shown.
+    assert.equal(
+      document.querySelector("#provider-note").classList.contains("hidden"),
+      true,
+    );
+
+    document.querySelector("#provider-options [data-provider-value='claude']").click();
+    await waitFor(
+      () => modelRequests.includes("claude"),
+      "switching provider did not load that provider's models",
+    );
+    assert.equal(
+      JSON.parse(window.localStorage.getItem("codex-web-settings")).provider,
+      "claude",
+      "the provider choice was not persisted",
+    );
+
+    document.querySelector("#model-chip").click();
+    await waitFor(
+      () => document.querySelector("#model-options [data-model-value='sonnet']"),
+      "the Claude models were not offered after the switch",
+    );
+    assert.equal(
+      document.querySelector("#model-options [data-model-value='gpt-5']"),
+      null,
+      "Codex models should not linger after switching provider",
+    );
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  },
+);
+
+test(
+  "a new conversation starts in the project last chosen for a chat",
+  { concurrency: false },
+  async (t) => {
+    const now = Math.floor(Date.now() / 1000);
+    const rpcRequests = [];
+    const fetchHandler = async (path, options = {}) => {
+      if (path === "/api/status") return jsonResponse({ ready: true, cwd: "/workspace" });
+      if (path === "/api/projects") {
+        return jsonResponse({
+          projects: [
+            { id: "p-api", name: "api", cwd: "/workspace/api", instructions: "" },
+            { id: "p-web", name: "web", cwd: "/workspace/web", instructions: "" },
+          ],
+          threadProjects: {},
+        });
+      }
+      if (path === "/api/project-threads") return jsonResponse(JSON.parse(options.body));
+      if (path !== "/api/rpc") throw new Error(`Unexpected request: ${path}`);
+      const request = JSON.parse(options.body);
+      rpcRequests.push(request);
+      if (request.method === "model/list") return jsonResponse({ result: { data: [] } });
+      if (request.method === "collaborationMode/list") {
+        return jsonResponse({ result: { data: [] } });
+      }
+      if (request.method === "thread/list") {
+        return jsonResponse({ result: { data: [], nextCursor: null } });
+      }
+      if (request.method === "thread/start") {
+        return jsonResponse({
+          result: {
+            thread: {
+              id: "sticky-thread",
+              cwd: request.params.cwd,
+              createdAt: now,
+              updatedAt: now,
+              status: { type: "idle" },
+              turns: [],
+            },
+            cwd: request.params.cwd,
+          },
+        });
+      }
+      if (request.method === "turn/start") {
+        return jsonResponse({ result: { turn: { id: "turn-sticky", status: "inProgress" } } });
+      }
+      throw new Error(`Unexpected RPC method: ${request.method}`);
+    };
+
+    const { window } = await createHarness(t, { fetchHandler });
+    const document = window.document;
+    const chipLabel = () => document.querySelector("#project-chip-label").textContent;
+
+    await waitFor(
+      () => document.querySelector("#project-chip-list [data-project-id='p-web']"),
+      "the chip menu was not populated",
+    );
+
+    document.querySelector("#project-chip").click();
+    document.querySelector("#project-chip-list [data-project-id='p-web']").click();
+    await waitFor(() => chipLabel() === "web", "the chip did not take the choice");
+
+    // Starting another conversation must not fall back to the sidebar filter.
+    document.querySelector("#new-chat").click();
+    await waitFor(
+      () => chipLabel() === "web",
+      "a new conversation reset the project instead of keeping the last choice",
+    );
+    assert.equal(
+      window.localStorage.getItem("codex-web-last-project"),
+      "p-web",
+      "the last chosen project was not persisted",
+    );
+
+    typePrompt(window, "سلام");
+    document.querySelector("#send-message").click();
+    await waitFor(
+      () => rpcRequests.some((request) => request.method === "thread/start"),
+      "the conversation was not started",
+    );
+    assert.equal(
+      rpcRequests.find((request) => request.method === "thread/start").params.cwd,
+      "/workspace/web",
+      "the remembered project did not drive the working folder",
+    );
+
+    // Choosing "no project" is a choice too, and must also stick.
+    document.querySelector("#new-chat").click();
+    document.querySelector("#project-chip").click();
+    document.querySelector("#project-chip-list [data-project-id='']").click();
+    await waitFor(
+      () => window.localStorage.getItem("codex-web-last-project") === "",
+      "clearing the project was not remembered",
+    );
+    document.querySelector("#new-chat").click();
+    await waitFor(
+      () => chipLabel() !== "web",
+      "a new conversation revived a project the user had cleared",
+    );
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  },
+);
+
+test(
+  "a new conversation keeps the saved model and reasoning effort",
+  { concurrency: false },
+  async (t) => {
+    const rpcRequests = [];
+    const now = Math.floor(Date.now() / 1000);
+    const fetchHandler = async (path, options = {}) => {
+      if (path === "/api/status") return jsonResponse({ ready: true, cwd: "/workspace" });
+      if (path === "/api/projects") {
+        return jsonResponse({ projects: [], threadProjects: {} });
+      }
+      if (path !== "/api/rpc") throw new Error(`Unexpected request: ${path}`);
+      const request = JSON.parse(options.body);
+      rpcRequests.push(request);
+      if (request.method === "model/list") {
+        return jsonResponse({
+          result: {
+            data: [
+              { id: "gpt-5", model: "gpt-5", displayName: "GPT-5" },
+              { id: "gpt-6", model: "gpt-6", displayName: "GPT-6" },
+            ],
+          },
+        });
+      }
+      if (request.method === "collaborationMode/list") {
+        return jsonResponse({ result: { data: [] } });
+      }
+      if (request.method === "thread/list") {
+        return jsonResponse({ result: { data: [], nextCursor: null } });
+      }
+      if (request.method === "thread/start") {
+        return jsonResponse({
+          result: {
+            thread: {
+              id: "kept-thread",
+              cwd: request.params.cwd,
+              createdAt: now,
+              updatedAt: now,
+              status: { type: "idle" },
+              turns: [],
+            },
+            cwd: request.params.cwd,
+          },
+        });
+      }
+      if (request.method === "turn/start") {
+        return jsonResponse({ result: { turn: { id: "turn-kept", status: "inProgress" } } });
+      }
+      throw new Error(`Unexpected RPC method: ${request.method}`);
+    };
+
+    const { window } = await createHarness(t, {
+      fetchHandler,
+      savedSettings: {
+        cwd: "/workspace",
+        effort: "high",
+        modelByProvider: { codex: "gpt-6", claude: "" },
+        provider: "codex",
+        version: 6,
+      },
+    });
+    const document = window.document;
+
+    await waitFor(
+      () => document.querySelector("#model-label").textContent === "GPT-6 · High",
+      "the saved model and effort were not restored",
+    );
+
+    document.querySelector("#new-chat").click();
+    await waitFor(
+      () => document.querySelector("#model-label").textContent === "GPT-6 · High",
+      "a new conversation reset the model or effort",
+    );
+
+    typePrompt(window, "سلام");
+    document.querySelector("#send-message").click();
+    await waitFor(
+      () => rpcRequests.some((request) => request.method === "thread/start"),
+      "the conversation was not started",
+    );
+    assert.equal(
+      rpcRequests.find((request) => request.method === "thread/start").params.model,
+      "gpt-6",
+      "the saved model was not used for the new conversation",
+    );
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  },
+);
+
+
+test(
+  "the project menu leads with recent projects and picks by keyboard",
+  { concurrency: false },
+  async (t) => {
+  const now = Math.floor(Date.now() / 1000);
+  const fetchHandler = async (path, options = {}) => {
+    if (path === "/api/status") return jsonResponse({ ready: true, cwd: "/workspace" });
+    if (path === "/api/projects") {
+      return jsonResponse({
+        projects: [
+          { id: "p-old", name: "کهنه", cwd: "/workspace/old", instructions: "" },
+          { id: "p-fresh", name: "تازه", cwd: "/workspace/fresh", instructions: "" },
+        ],
+        threadProjects: {},
+      });
+    }
+    if (path !== "/api/rpc") throw new Error(`Unexpected request: ${path}`);
+    const request = JSON.parse(options.body);
+    if (request.method === "model/list") return jsonResponse({ result: { data: [] } });
+    if (request.method === "collaborationMode/list") {
+      return jsonResponse({ result: { data: [] } });
+    }
+    if (request.method === "thread/list") {
+      return jsonResponse({
+        result: {
+          data: [
+            { id: "t-fresh", name: "ت", cwd: "/workspace/fresh", provider: "codex",
+              createdAt: now, updatedAt: now, status: { type: "idle" } },
+            { id: "t-old", name: "ک", cwd: "/workspace/old", provider: "codex",
+              createdAt: now - 900000, updatedAt: now - 900000, status: { type: "idle" } },
+          ],
+          nextCursor: null,
+        },
+      });
+    }
+    throw new Error(`Unexpected RPC method: ${request.method}`);
+  };
+  const { window } = await createHarness(t, { fetchHandler });
+  const document = window.document;
+  const order = () =>
+    [...document.querySelectorAll("#project-chip-list [data-project-id]")].map(
+      (row) => row.dataset.projectId,
+    );
+  await waitFor(() => order().length === 3, "menu not populated");
+  // Creation order is old-then-fresh; recency reverses it and "no project" trails.
+  assert.deepEqual(order(), ["p-fresh", "p-old", ""]);
+  const row = document.querySelector("#project-chip-list [data-project-id='p-fresh']");
+  assert.equal(row.querySelector(".project-item-cwd").textContent, "/workspace/fresh");
+  assert.equal(row.title, "/workspace/fresh", "the full folder stays in the tooltip");
+  document.querySelector("#project-chip").click();
+  const filter = document.querySelector("#project-chip-filter");
+  filter.value = "کهنه";
+  filter.dispatchEvent(new window.Event("input", { bubbles: true }));
+  await waitFor(() => order().join() === "p-old,", "typing did not narrow");
+  const enter = new window.Event("keydown", { bubbles: true, cancelable: true });
+  Object.defineProperty(enter, "key", { value: "Enter" });
+  filter.dispatchEvent(enter);
+  await waitFor(
+      () => document.querySelector("#project-chip-label").textContent === "کهنه",
+      "Enter did not pick the highlighted project",
+    );
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  },
+);
+
+test(
+  "a conversation row gives the title its own line",
+  { concurrency: false },
+  async (t) => {
+    const now = Math.floor(Date.now() / 1000);
+    const longTitle = "بازطراحی نوار کناری و انتخاب پروژه از خود composer";
+    const fetchHandler = async (path, options = {}) => {
+      if (path === "/api/status") return jsonResponse({ ready: true, cwd: "/workspace" });
+      if (path === "/api/projects") {
+        return jsonResponse({
+          projects: [{ id: "p-web", name: "web", cwd: "/workspace/web", instructions: "" }],
+          threadProjects: {},
+        });
+      }
+      if (path !== "/api/rpc") throw new Error(`Unexpected request: ${path}`);
+      const request = JSON.parse(options.body);
+      if (request.method === "model/list") return jsonResponse({ result: { data: [] } });
+      if (request.method === "collaborationMode/list") {
+        return jsonResponse({ result: { data: [] } });
+      }
+      if (request.method === "thread/list") {
+        return jsonResponse({
+          result: {
+            data: [
+              {
+                id: "t-long",
+                name: longTitle,
+                cwd: "/workspace/web",
+                provider: "claude",
+                createdAt: now - 7 * 3600,
+                updatedAt: now - 7 * 3600,
+                status: { type: "idle" },
+              },
+            ],
+            nextCursor: null,
+          },
+        });
+      }
+      throw new Error(`Unexpected RPC method: ${request.method}`);
+    };
+
+    const { window } = await createHarness(t, { fetchHandler });
+    const document = window.document;
+    await waitFor(
+      () => document.querySelector("[data-thread-id='t-long']"),
+      "the conversation was not listed",
+    );
+    const row = document.querySelector("[data-thread-id='t-long']");
+    const heading = row.querySelector(".thread-item-heading");
+    const meta = row.querySelector(".thread-item-meta");
+
+    // The title must not share its line with the provider or the timestamp;
+    // that is what squeezed it down to about ten characters.
+    assert.equal(heading.querySelector(".thread-item-title").textContent, longTitle);
+    assert.equal(heading.querySelector(".thread-provider"), null);
+    assert.equal(heading.querySelector(".thread-item-time"), null);
+    assert.equal(meta.querySelector(".thread-provider").textContent, "Claude");
+
+    // Relative times follow the locale like every other number in the UI.
+    assert.equal(meta.querySelector(".thread-item-time").textContent, "۷ ساعت");
+
+    // The separator must be its own node: as a pseudo-element on the provider
+    // it was absorbed by that element's isolated LTR run and came out misplaced.
+    const origin = [...meta.querySelector(".thread-item-origin").children].map(
+      (node) => node.className,
+    );
+    assert.deepEqual(origin, [
+      "thread-item-project",
+      "thread-item-separator",
+      "thread-provider",
+    ]);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  },
+);
+
+test(
+  "messages carry the turn's clock time and the answer's duration",
+  { concurrency: false },
+  async (t) => {
+    // 20:00:04 -> 20:03:21 local, matching the shape both providers return.
+    const startedAt = Math.floor(Date.UTC(2026, 8, 23, 12, 0, 0) / 1000);
+    const completedAt = startedAt + 197;
+    const fetchHandler = async (path, options = {}) => {
+      if (path === "/api/status") return jsonResponse({ ready: true, cwd: "/workspace" });
+      if (path === "/api/projects") {
+        return jsonResponse({ projects: [], threadProjects: {} });
+      }
+      if (path !== "/api/rpc") throw new Error(`Unexpected request: ${path}`);
+      const request = JSON.parse(options.body);
+      if (request.method === "model/list") return jsonResponse({ result: { data: [] } });
+      if (request.method === "collaborationMode/list") {
+        return jsonResponse({ result: { data: [] } });
+      }
+      if (request.method === "thread/list") {
+        return jsonResponse({ result: { data: [], nextCursor: null } });
+      }
+      if (request.method === "thread/resume") {
+        return jsonResponse({
+          result: {
+            thread: {
+              id: "timed-thread",
+              name: "زمان‌دار",
+              cwd: "/workspace",
+              provider: "codex",
+              createdAt: startedAt,
+              updatedAt: completedAt,
+              status: { type: "idle" },
+              turns: [
+                {
+                  id: "turn-1",
+                  status: "completed",
+                  startedAt,
+                  completedAt,
+                  durationMs: 197_000,
+                  items: [
+                    { id: "i-user", type: "userMessage", content: [{ type: "text", text: "سلام" }] },
+                    {
+                      id: "i-agent",
+                      type: "agentMessage",
+                      phase: "final_answer",
+                      content: [{ type: "text", text: "پاسخ" }],
+                    },
+                  ],
+                },
+              ],
+            },
+          },
+        });
+      }
+      throw new Error(`Unexpected RPC method: ${request.method}`);
+    };
+
+    const { window } = await createHarness(t, {
+      fetchHandler,
+      initialUrl: "http://localhost/?session=timed-thread",
+    });
+    const document = window.document;
+    await waitFor(
+      () => document.querySelector("[data-item-id='i-agent']"),
+      "the conversation was not hydrated",
+    );
+
+    const userTime = document
+      .querySelector("[data-item-id='i-user'] .message-time")
+      .textContent.trim();
+    const agentTime = document
+      .querySelector("[data-item-id='i-agent'] .message-time")
+      .textContent.trim();
+
+    // The user message is stamped with when the exchange began...
+    assert.ok(userTime, "the user message has no clock time");
+    // Persian digits, so match the locale's numerals rather than ASCII.
+    assert.match(userTime, /^[۰-۹]{1,2}:[۰-۹]{2}$/, `expected a clock time, got ${userTime}`);
+    // ...and the answer reports how long it took, not a second clock reading.
+    assert.equal(agentTime, "۳ دقیقه", `expected a duration, got ${agentTime}`);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  },
+);
+
+test("the conversation reserves space for the composer's real height", async () => {
+  const [index, styles] = await Promise.all([
+    readFile(INDEX, "utf8"),
+    readFile(STYLES, "utf8"),
+  ]);
+
+  // The composer floats over the conversation, so a fixed reserve leaves the
+  // last messages buried once the textarea grows.
+  const messages = styles.match(/\.messages\s*\{(?<body>[^}]*)\}/)?.groups?.body || "";
+  assert.match(
+    messages,
+    /padding:[^;]*var\(--composer-height/,
+    "the messages reserve must follow --composer-height",
+  );
+  assert.match(
+    styles,
+    /\.composer-wrap\s*\{[^}]*position:\s*absolute/s,
+    "the reserve only matters while the composer overlays the conversation",
+  );
+
+  // The hint moved inside the box, between the chips and the actions.
+  const footer = index.match(
+    /<div class="composer-footer">(?<body>[\s\S]*?)<div class="composer-actions">/,
+  )?.groups?.body;
+  assert.ok(footer, "composer footer markup changed shape");
+  assert.match(footer, /id="composer-hint"/, "the hint should sit inside the composer");
+  assert.doesNotMatch(
+    index.slice(index.indexOf("</div>\n        </div>\n      </main>")),
+    /composer-hint/,
+    "the hint should no longer trail the composer",
+  );
+});
+
+test(
+  "a new conversation follows the sidebar filter over the last chip choice",
+  { concurrency: false },
+  async (t) => {
+    const now = Math.floor(Date.now() / 1000);
+    const fetchHandler = async (path, options = {}) => {
+      if (path === "/api/status") return jsonResponse({ ready: true, cwd: "/workspace" });
+      if (path === "/api/projects") {
+        return jsonResponse({
+          projects: [
+            { id: "p-api", name: "api", cwd: "/workspace/api", instructions: "" },
+            { id: "p-web", name: "web", cwd: "/workspace/web", instructions: "" },
+          ],
+          threadProjects: {},
+        });
+      }
+      if (path === "/api/project-threads") return jsonResponse(JSON.parse(options.body));
+      if (path !== "/api/rpc") throw new Error(`Unexpected request: ${path}`);
+      const request = JSON.parse(options.body);
+      if (request.method === "model/list") return jsonResponse({ result: { data: [] } });
+      if (request.method === "collaborationMode/list") {
+        return jsonResponse({ result: { data: [] } });
+      }
+      if (request.method === "thread/list") {
+        return jsonResponse({
+          result: {
+            data: [
+              {
+                id: "t-web",
+                name: "وب",
+                cwd: "/workspace/web",
+                provider: "codex",
+                createdAt: now,
+                updatedAt: now,
+                status: { type: "idle" },
+              },
+            ],
+            nextCursor: null,
+          },
+        });
+      }
+      throw new Error(`Unexpected RPC method: ${request.method}`);
+    };
+
+    const { window } = await createHarness(t, { fetchHandler });
+    const document = window.document;
+    const chipLabel = () => document.querySelector("#project-chip-label").textContent;
+
+    await waitFor(
+      () => document.querySelector("#project-chip-list [data-project-id='p-api']"),
+      "the chip menu was not populated",
+    );
+
+    // Deliberately pick api from the chip, so it becomes the remembered choice.
+    document.querySelector("#project-chip").click();
+    document.querySelector("#project-chip-list [data-project-id='p-api']").click();
+    await waitFor(() => chipLabel() === "api", "the chip did not take the choice");
+
+    // Then narrow the sidebar to a different project and start a conversation.
+    document.querySelector("#project-switcher").click();
+    document.querySelector("#project-list [data-project-id='p-web']").click();
+    await waitFor(
+      () => document.querySelector("#project-switcher-name").textContent.trim() === "web",
+      "the sidebar filter did not move",
+    );
+    document.querySelector("#new-chat").click();
+    await waitFor(
+      () => chipLabel() === "web",
+      "a new conversation should start in the project being browsed",
+    );
+
+    // Clearing the filter falls back to the remembered choice.
+    document.querySelector("#project-switcher").click();
+    document.querySelector("#project-list [data-project-id='']").click();
+    document.querySelector("#new-chat").click();
+    await waitFor(
+      () => chipLabel() === "api",
+      "with no filter it should fall back to the last chosen project",
+    );
     await new Promise((resolve) => setTimeout(resolve, 25));
   },
 );

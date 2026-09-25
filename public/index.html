@@ -48,27 +48,49 @@
           گفتگوی تازه
         </button>
 
-        <section class="project-sidebar" aria-labelledby="projects-label">
-          <div class="project-sidebar-heading">
-            <span id="projects-label">پروژه‌ها</span>
-            <button
-              class="project-add-button"
-              id="project-add"
-              type="button"
-              aria-label="ساخت پروژه"
-              title="ساخت پروژه"
-            >
-              ＋
+        <div class="project-switcher">
+          <button
+            class="project-switcher-trigger"
+            id="project-switcher"
+            type="button"
+            aria-haspopup="listbox"
+            aria-expanded="false"
+            aria-controls="project-switcher-menu"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M3.5 6.5h6l2 2h9v9a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z" />
+            </svg>
+            <span class="project-switcher-name" id="project-switcher-name" dir="auto">
+              همهٔ گفتگوها
+            </span>
+            <span class="project-switcher-count" id="project-switcher-count"></span>
+            <span class="project-switcher-caret" aria-hidden="true">▾</span>
+          </button>
+          <div
+            class="project-switcher-menu hidden"
+            id="project-switcher-menu"
+            role="listbox"
+            aria-label="پروژه‌ها"
+          >
+            <label class="project-switcher-search">
+              <span aria-hidden="true">⌕</span>
+              <input
+                id="project-switcher-filter"
+                type="search"
+                placeholder="فیلتر پروژه…"
+                autocomplete="off"
+              />
+            </label>
+            <div class="project-switcher-options" id="project-list"></div>
+            <p class="project-switcher-empty hidden" id="project-switcher-empty">
+              پروژه‌ای پیدا نشد.
+            </p>
+            <button class="project-switcher-add" id="project-add" type="button">
+              <span aria-hidden="true">＋</span>
+              پروژهٔ تازه
             </button>
           </div>
-          <button class="project-all-button active" id="project-all" type="button">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M4 6.5h16M4 12h16M4 17.5h16" />
-            </svg>
-            <span>همهٔ گفتگوها</span>
-          </button>
-          <div class="project-list" id="project-list"></div>
-        </section>
+        </div>
 
         <label class="search-box">
           <span aria-hidden="true">⌕</span>
@@ -104,7 +126,6 @@
           </button>
           <div class="thread-heading">
             <h1 id="thread-title">گفتگوی تازه</h1>
-            <div class="thread-meta" id="thread-meta" dir="ltr"></div>
           </div>
           <div
             class="message-navigation"
@@ -150,12 +171,6 @@
               <span>مصرف</span>
               <bdi id="usage-percent" dir="rtl">—</bdi>
             </button>
-            <button class="text-button header-project-button" id="header-project" type="button">
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M3.5 6.5h6l2 2h9v9a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z" />
-              </svg>
-              <span id="header-project-label">پروژه</span>
-            </button>
             <button class="text-button" id="share-chat" type="button" disabled>
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <circle cx="18" cy="5" r="2.5" />
@@ -181,17 +196,6 @@
             <p id="welcome-description">
               کد، فایل یا ایده‌ات را بفرست؛ ابزارهای فنی پشت صحنه آماده‌اند.
             </p>
-            <div class="suggestions">
-              <button data-prompt="ساختار این پروژه را بررسی کن و خلاصه‌ای از بخش‌های اصلی بده.">
-                بررسی ساختار پروژه
-              </button>
-              <button data-prompt="تغییرات git فعلی را review کن و مشکلات مهم را بگو.">
-                Review تغییرات فعلی
-              </button>
-              <button data-prompt="تست‌های پروژه را اجرا کن و اگر خطایی هست علتش را پیدا کن.">
-                بررسی تست‌ها
-              </button>
-            </div>
           </div>
           <div class="messages" id="messages"></div>
         </section>
@@ -354,21 +358,80 @@
             ></textarea>
             <div class="composer-footer">
               <div class="composer-context">
-                <button
-                  class="context-chip"
-                  id="cwd-chip"
-                  type="button"
-                  aria-label="تغییر پوشهٔ کاری و تنظیمات گفتگو"
-                  title="پوشهٔ کاری و تنظیمات گفتگو"
-                >
-                  <svg class="context-chip-icon" data-icon="settings" viewBox="0 0 24 24" aria-hidden="true">
-                    <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.09a2 2 0 0 1-1-1.74v-.51a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
-                    <circle cx="12" cy="12" r="3" />
-                  </svg>
-                  <bdi id="cwd-label">…</bdi>
-                </button>
-                <span class="context-chip passive" id="model-label">مدل پیش‌فرض</span>
+                <div class="project-switcher project-chip-switcher">
+                  <button
+                    class="context-chip project-chip"
+                    id="project-chip"
+                    type="button"
+                    aria-haspopup="listbox"
+                    aria-expanded="false"
+                    aria-controls="project-chip-menu"
+                    aria-label="پروژهٔ این گفتگو"
+                  >
+                    <svg class="context-chip-icon" data-icon="project" viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M3.5 6.5h6l2 2h9v9a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z" />
+                    </svg>
+                    <bdi id="project-chip-label">…</bdi>
+                    <span class="project-chip-hint hidden" id="project-chip-hint">بر اساس پوشه</span>
+                    <span class="project-switcher-caret" aria-hidden="true">▾</span>
+                  </button>
+                  <div
+                    class="project-switcher-menu upward hidden"
+                    id="project-chip-menu"
+                    role="listbox"
+                    aria-label="انتخاب پروژهٔ گفتگو"
+                  >
+                    <label class="project-switcher-search">
+                      <span aria-hidden="true">⌕</span>
+                      <input
+                        id="project-chip-filter"
+                        type="search"
+                        placeholder="فیلتر پروژه…"
+                        autocomplete="off"
+                      />
+                    </label>
+                    <div class="project-switcher-options" id="project-chip-list"></div>
+                    <p class="project-switcher-empty hidden" id="project-chip-empty">
+                      پروژه‌ای پیدا نشد.
+                    </p>
+                    <button class="project-switcher-add" id="project-chip-add" type="button">
+                      <span aria-hidden="true">＋</span>
+                      پروژهٔ تازه
+                    </button>
+                  </div>
+                </div>
+                <div class="project-switcher run-chip-switcher">
+                  <button
+                    class="context-chip run-chip"
+                    id="model-chip"
+                    type="button"
+                    aria-haspopup="listbox"
+                    aria-expanded="false"
+                    aria-controls="run-chip-menu"
+                    aria-label="مدل و reasoning effort"
+                  >
+                    <bdi id="model-label">مدل پیش‌فرض</bdi>
+                    <span class="project-switcher-caret" aria-hidden="true">▾</span>
+                  </button>
+                  <div
+                    class="project-switcher-menu upward hidden"
+                    id="run-chip-menu"
+                    role="listbox"
+                    aria-label="انتخاب مدل و reasoning effort"
+                  >
+                    <p class="run-chip-heading">ارائه‌دهنده</p>
+                    <div class="project-switcher-options" id="provider-options"></div>
+                    <p class="run-chip-note hidden" id="provider-note">
+                      برای گفتگوی تازه اعمال می‌شود.
+                    </p>
+                    <p class="run-chip-heading">مدل</p>
+                    <div class="project-switcher-options" id="model-options"></div>
+                    <p class="run-chip-heading">Reasoning effort</p>
+                    <div class="effort-options" id="effort-options"></div>
+                  </div>
+                </div>
               </div>
+              <p class="composer-hint" id="composer-hint">Enter برای ارسال · Shift+Enter برای خط جدید</p>
               <div class="composer-actions">
                 <span class="upload-status hidden" id="upload-status" aria-live="polite">
                   در حال افزودن فایل…
@@ -422,7 +485,6 @@
               </div>
             </div>
           </div>
-          <p class="composer-hint" id="composer-hint">Enter برای ارسال · Shift+Enter برای خط جدید</p>
         </div>
       </main>
     </div>
@@ -504,17 +566,7 @@
           </label>
         </div>
 
-        <label class="field codex-only-setting">
-          <span>لحن پاسخ</span>
-          <select id="personality-select">
-            <option value="">پیش‌فرض</option>
-            <option value="friendly">Friendly</option>
-            <option value="pragmatic">Pragmatic</option>
-            <option value="none">None</option>
-          </select>
-        </label>
-
-        <label class="field claude-only-setting" id="claude-permission-field">
+        <label class="field claude-only-setting">
           <span>مجوزهای Claude</span>
           <select id="claude-permission-mode">
             <option value="acceptEdits">ویرایش فایل‌ها مجاز؛ ابزارهای تأییدنشده رد می‌شوند</option>
@@ -602,23 +654,6 @@
       </form>
     </dialog>
 
-    <dialog class="assign-project-dialog" id="assign-project-dialog">
-      <form method="dialog" id="assign-project-form">
-        <div class="dialog-header">
-          <div>
-            <span class="dialog-eyebrow">Project</span>
-            <h2>پروژهٔ این گفتگو</h2>
-            <p>انتخاب پروژه فقط گفتگو را گروه‌بندی می‌کند؛ فایل‌ها جابه‌جا نمی‌شوند.</p>
-          </div>
-          <button class="icon-button" id="assign-project-close" type="button" aria-label="بستن">×</button>
-        </div>
-        <div class="assign-project-options" id="assign-project-options"></div>
-        <div class="dialog-actions">
-          <button class="secondary-button" id="assign-project-cancel" type="button">انصراف</button>
-          <button class="primary-button" id="assign-project-save" type="submit">ذخیره</button>
-        </div>
-      </form>
-    </dialog>
 
     <dialog class="share-dialog" id="share-dialog">
       <div class="dialog-header">

@@ -37,6 +37,8 @@ const PERMISSION_MODES = new Set([
   "plan",
 ]);
 const EFFORT_LEVELS = new Set(["low", "medium", "high", "xhigh", "max"]);
+// Placeholder used until Claude Code writes a title into the session file.
+const DEFAULT_THREAD_NAME = "گفتگوی Claude";
 const GOAL_STATUSES = new Set(["active", "paused"]);
 
 const MODEL_OPTIONS = [
@@ -257,7 +259,7 @@ function threadView(thread) {
     id: publicId(thread.id),
     provider: "claude",
     providerThreadId: thread.id,
-    name: thread.name || "گفتگوی Claude",
+    name: thread.name || DEFAULT_THREAD_NAME,
     cwd: thread.cwd,
     model: thread.model || "",
     permissionMode: thread.permissionMode || "",
@@ -498,7 +500,7 @@ export class ClaudeProvider {
     const thread = JSON.parse(JSON.stringify(value));
     thread.id = String(thread.id);
     thread.cwd = String(thread.cwd);
-    thread.name = String(thread.name || "گفتگوی Claude");
+    thread.name = String(thread.name || DEFAULT_THREAD_NAME);
     thread.model = typeof thread.model === "string" ? thread.model : "";
     try {
       thread.permissionMode = validatePermissionMode(thread.permissionMode);
@@ -577,7 +579,7 @@ export class ClaudeProvider {
         nativeThread.nativeName =
           typeof metadata.name === "string" && metadata.name ? metadata.name : "";
         nativeThread.name =
-          nativeThread.nativeName || nativeThread.name || "گفتگوی Claude";
+          nativeThread.nativeName || nativeThread.name || DEFAULT_THREAD_NAME;
         if (metadata.goal) nativeThread.goal = metadata.goal;
         else delete nativeThread.goal;
         nativeThread.archived = Boolean(metadata.archived);
@@ -587,6 +589,36 @@ export class ClaudeProvider {
         );
       }
     }
+  }
+
+  async #refreshPlaceholderName(thread) {
+    if (thread.nativeName) return;
+    if (thread.name && thread.name !== DEFAULT_THREAD_NAME) return;
+    try {
+      if (thread.transcriptPath) {
+        this.#adoptTranscriptName(thread, await transcriptSummary(thread.transcriptPath));
+      }
+      if (thread.name === DEFAULT_THREAD_NAME) {
+        await this.discoverNativeThreads({ force: true });
+      }
+      if (thread.name !== DEFAULT_THREAD_NAME) await this.persist();
+    } catch (error) {
+      this.log(`Could not read the Claude conversation title: ${error.message}`);
+    }
+  }
+
+  #adoptTranscriptName(thread, summary) {
+    if (thread.nativeName) return;
+    if (thread.name && thread.name !== DEFAULT_THREAD_NAME) return;
+    const name = String(summary?.title || summary?.firstPrompt || "").trim();
+    if (!name || name === thread.name) return;
+    thread.name = name.length > 80 ? `${name.slice(0, 80)}…` : name;
+    this.#markThreadDirty(thread, ["name"]);
+    this.notify("thread/name/updated", {
+      threadId: publicId(thread.id),
+      name: thread.name,
+      threadName: thread.name,
+    });
   }
 
   #markThreadDirty(thread, fields = ["*"]) {
@@ -950,12 +982,16 @@ export class ClaudeProvider {
             existing.sessionInitialized = true;
             this.#markThreadDirty(existing, ["sessionInitialized"]);
           }
+          // Conversations started here keep the placeholder name, because only
+          // natively discovered ones used to read the title Claude writes into
+          // the session file. Adopt it too, without touching a chosen name.
+          this.#adoptTranscriptName(existing, summary);
           continue;
         }
 
         const metadata = this.nativeMetadata.get(id);
         const defaultName =
-          summary.title || summary.firstPrompt || "گفتگوی Claude";
+          summary.title || summary.firstPrompt || DEFAULT_THREAD_NAME;
         if (existing) {
           existing.transcriptPath = transcriptPath;
           existing.cwd = summary.cwd || existing.cwd || process.cwd();
@@ -1094,7 +1130,7 @@ export class ClaudeProvider {
     const thread = {
       id: String(id),
       provider: "claude",
-      name: params.name || "گفتگوی Claude",
+      name: params.name || DEFAULT_THREAD_NAME,
       cwd,
       model: params.model || "",
       permissionMode,
@@ -1136,8 +1172,8 @@ export class ClaudeProvider {
   async setName(params) {
     const thread = this.threads.get(rawId(params.threadId));
     if (!thread) throw new Error("گفتگوی Claude پیدا نشد");
-    thread.name = String(params.name || params.threadName || "گفتگوی Claude").trim();
-    if (!thread.name) thread.name = "گفتگوی Claude";
+    thread.name = String(params.name || params.threadName || DEFAULT_THREAD_NAME).trim();
+    if (!thread.name) thread.name = DEFAULT_THREAD_NAME;
     thread.updatedAt = nowSeconds();
     if (thread.native) {
       thread.nativeName = thread.name;
@@ -1763,6 +1799,10 @@ export class ClaudeProvider {
           threadId: publicId(thread.id),
           turn: { id: turn.id, status, error: turn.error },
         });
+        // Claude writes the title into the session file as the turn lands, so
+        // look for it now rather than leaving the placeholder up until the
+        // next discovery sweep.
+        await this.#refreshPlaceholderName(thread);
         this.notify("thread/status/changed", {
           threadId: publicId(thread.id),
           status: thread.status,

@@ -49,11 +49,6 @@ const SLASH_COMMANDS = [
     description: "شروع یک گفتگوی مستقل جدید",
   },
   {
-    name: "clear",
-    label: "پاک‌کردن و شروع دوباره",
-    description: "نام دیگر /new برای آغاز یک گفتگوی تازه",
-  },
-  {
     name: "resume",
     label: "ادامهٔ یک گفتگو",
     description: "رفتن به فهرست گفتگوهای ذخیره‌شده",
@@ -72,22 +67,12 @@ const SLASH_COMMANDS = [
   {
     name: "model",
     label: "انتخاب مدل",
-    description: "بازکردن تنظیمات مدل گفتگوهای تازه",
+    description: "بازکردن تنظیمات مدل و سطح استدلال",
   },
   {
     name: "permissions",
     label: "تنظیم دسترسی‌ها",
     description: "بازکردن تنظیمات sandbox و approval",
-  },
-  {
-    name: "settings",
-    label: "تنظیمات",
-    description: "بازکردن همهٔ تنظیمات Codex Web",
-  },
-  {
-    name: "help",
-    label: "راهنمای فرمان‌ها",
-    description: "نمایش فهرست فرمان‌هایی که این رابط پشتیبانی می‌کند",
   },
 ].map((command) => ({ ...command, kind: "builtin", token: `/${command.name}` }));
 
@@ -188,12 +173,6 @@ const KNOWN_CODEX_COMMAND_NAMES = new Set([
 
 const elements = {
   addImages: $("#add-images"),
-  assignProjectCancel: $("#assign-project-cancel"),
-  assignProjectClose: $("#assign-project-close"),
-  assignProjectDialog: $("#assign-project-dialog"),
-  assignProjectForm: $("#assign-project-form"),
-  assignProjectOptions: $("#assign-project-options"),
-  assignProjectSave: $("#assign-project-save"),
   approvalAccept: $("#approval-accept"),
   approvalCancel: $("#approval-cancel"),
   approvalContext: $("#approval-context"),
@@ -207,21 +186,18 @@ const elements = {
   approvalSelect: $("#approval-select"),
   connectionLabel: $("#connection-label"),
   composerHint: $("#composer-hint"),
+  composerWrap: $(".composer-wrap"),
   composer: $(".composer"),
   composerDropOverlay: $("#composer-drop-overlay"),
   composerTools: $("#composer-tools"),
   composerToolsMenu: $("#composer-tools-menu"),
   composerToolsNote: $("#composer-tools-note"),
   conversation: $("#conversation"),
-  cwdChip: $("#cwd-chip"),
   cwdInput: $("#cwd-input"),
-  cwdLabel: $("#cwd-label"),
   dictate: $("#dictate"),
   effortSelect: $("#effort-select"),
   fullAccessWarning: $("#full-access-warning"),
   headerSettings: $("#header-settings"),
-  headerProject: $("#header-project"),
-  headerProjectLabel: $("#header-project-label"),
   imageInput: $("#image-input"),
   goalClear: $("#goal-clear"),
   goalDialog: $("#goal-dialog"),
@@ -250,18 +226,22 @@ const elements = {
   menuButton: $("#menu-button"),
   messages: $("#messages"),
   mobileScrim: $("#mobile-scrim"),
+  modelChip: $("#model-chip"),
   modelLabel: $("#model-label"),
+  modelOptions: $("#model-options"),
+  providerOptions: $("#provider-options"),
+  providerNote: $("#provider-note"),
+  effortOptions: $("#effort-options"),
+  runChipMenu: $("#run-chip-menu"),
   modelSelect: $("#model-select"),
   newChat: $("#new-chat"),
   nextUserMessage: $("#next-user-message"),
   openSettings: $("#open-settings"),
-  personalitySelect: $("#personality-select"),
   planModeOption: $("#plan-mode-option"),
   providerSelect: $("#provider-select"),
   claudePermissionMode: $("#claude-permission-mode"),
   previousUserMessage: $("#previous-user-message"),
   projectAdd: $("#project-add"),
-  projectAll: $("#project-all"),
   projectCancel: $("#project-cancel"),
   projectCwd: $("#project-cwd"),
   projectDelete: $("#project-delete"),
@@ -271,9 +251,23 @@ const elements = {
   projectForm: $("#project-form"),
   projectId: $("#project-id"),
   projectInstructions: $("#project-instructions"),
+  projectChip: $("#project-chip"),
+  projectChipAdd: $("#project-chip-add"),
+  projectChipEmpty: $("#project-chip-empty"),
+  projectChipFilter: $("#project-chip-filter"),
+  projectChipHint: $("#project-chip-hint"),
+  projectChipLabel: $("#project-chip-label"),
+  projectChipList: $("#project-chip-list"),
+  projectChipMenu: $("#project-chip-menu"),
   projectList: $("#project-list"),
   projectName: $("#project-name"),
   projectSave: $("#project-save"),
+  projectSwitcher: $("#project-switcher"),
+  projectSwitcherCount: $("#project-switcher-count"),
+  projectSwitcherEmpty: $("#project-switcher-empty"),
+  projectSwitcherFilter: $("#project-switcher-filter"),
+  projectSwitcherMenu: $("#project-switcher-menu"),
+  projectSwitcherName: $("#project-switcher-name"),
   prompt: $("#prompt"),
   promptQueue: $("#prompt-queue"),
   promptQueueClear: $("#prompt-queue-clear"),
@@ -304,7 +298,6 @@ const elements = {
   statusDot: $("#status-dot"),
   stopTurn: $("#stop-turn"),
   threadList: $("#thread-list"),
-  threadMeta: $("#thread-meta"),
   threadSearch: $("#thread-search"),
   threadTitle: $("#thread-title"),
   toasts: $("#toasts"),
@@ -334,15 +327,39 @@ const defaultSettings = {
   effort: "",
   modelByProvider: { codex: "", claude: "" },
   palette: "cyan",
-  personality: "",
   provider: "codex",
   sandbox: "",
   sidebarCollapsed: false,
 };
 
-const SETTINGS_VERSION = 5;
+const SETTINGS_VERSION = 6;
 const ACCENT_PALETTES = new Set(["cyan", "red", "purple", "green"]);
 const ACTIVE_PROJECT_KEY = "codex-web-active-project";
+// The project a new conversation should start in: the last one deliberately
+// chosen for a chat, which is not the same thing as the sidebar's browse
+// filter. Absent means "never chosen"; "" means "chosen: no project".
+const LAST_PROJECT_KEY = "codex-web-last-project";
+const THREAD_LIST_PAGE_SIZE = 100;
+const LAST_OPENED_KEY = "codex-web-last-opened";
+// Enough to outlive a working session without letting the map grow forever.
+const LAST_OPENED_LIMIT = 50;
+// How many recently opened conversations can be pulled up from other projects.
+const PINNED_RECENT_COUNT = 3;
+const PINNED_LIMIT = 4;
+
+function loadLastOpened() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(LAST_OPENED_KEY) || "{}");
+    if (!saved || typeof saved !== "object" || Array.isArray(saved)) return {};
+    return Object.fromEntries(
+      Object.entries(saved).filter(
+        ([threadId, at]) => typeof threadId === "string" && Number.isFinite(at),
+      ),
+    );
+  } catch {
+    return {};
+  }
+}
 
 function loadActiveProjectId() {
   try {
@@ -352,8 +369,27 @@ function loadActiveProjectId() {
   }
 }
 
+function loadLastProjectId() {
+  try {
+    const saved = localStorage.getItem(LAST_PROJECT_KEY);
+    if (saved === null) return undefined;
+    return saved || null;
+  } catch {
+    return undefined;
+  }
+}
+
+function persistLastProject(projectId) {
+  try {
+    localStorage.setItem(LAST_PROJECT_KEY, projectId || "");
+  } catch {
+    // The choice still applies to this tab when storage is unavailable.
+  }
+}
+
 const state = {
   activeProjectId: loadActiveProjectId(),
+  lastProjectId: loadLastProjectId(),
   activeInteractionKey: null,
   busy: false,
   collaborationModes: [],
@@ -414,6 +450,11 @@ const state = {
   threadActivity: new Map(),
   threadEventBacklog: new Map(),
   threadRuntime: new Map(),
+  turnTimings: new Map(),
+  composerHeight: null,
+  lastOpenedAt: loadLastOpened(),
+  threadListHasMore: false,
+  threadListLimit: THREAD_LIST_PAGE_SIZE,
   threadProjects: new Map(),
   threadTokenUsage: new Map(),
   threads: [],
@@ -439,7 +480,12 @@ const state = {
 function loadSettings() {
   try {
     const saved = JSON.parse(localStorage.getItem("codex-web-settings") || "{}");
-    const { model: legacyModel, modelByProvider: storedModels, ...savedSettings } = saved;
+    const {
+      model: legacyModel,
+      modelByProvider: storedModels,
+      personality: _removedPersonality,
+      ...savedSettings
+    } = saved;
     const modelByProvider = {
       ...defaultSettings.modelByProvider,
       ...(storedModels || {}),
@@ -1411,31 +1457,6 @@ function showSlashStatus() {
   card.append(list);
 }
 
-function showSlashHelp() {
-  const card = renderLocalCommandCard(
-    `فرمان‌های پشتیبانی‌شده برای ${providerLabel(effectiveProvider())}`,
-  );
-  const list = document.createElement("ul");
-  list.className = "local-command-help";
-  for (const command of slashCommandsForProvider()) {
-    const item = document.createElement("li");
-    const token = document.createElement("code");
-    token.textContent = command.token;
-    const description = document.createElement("span");
-    description.textContent = command.description;
-    item.append(token, description);
-    const badge = slashCommandBadge(command);
-    if (badge) {
-      const kind = document.createElement("span");
-      kind.className = "slash-command-kind";
-      kind.textContent = badge;
-      item.append(kind);
-    }
-    list.append(item);
-  }
-  card.append(list);
-}
-
 async function runCompactSlashCommand(command) {
   const threadId = state.currentThreadId;
   const targetDraftKey = draftKey(threadId);
@@ -1520,7 +1541,6 @@ async function executeSlashCommand(command) {
       await runCompactSlashCommand(command);
       return;
     case "new":
-    case "clear":
       clearSlashCommandText(command.token, targetDraftKey);
       newChat();
       return;
@@ -1553,14 +1573,6 @@ async function executeSlashCommand(command) {
             : elements.sandboxSelect,
         provider: effectiveProvider(),
       });
-      return;
-    case "settings":
-      clearSlashCommandText(command.token, targetDraftKey);
-      openSettings();
-      return;
-    case "help":
-      clearSlashCommandText(command.token, targetDraftKey);
-      showSlashHelp();
       return;
   }
 }
@@ -2134,14 +2146,173 @@ function updateSettingsProviderUi(provider) {
   updateFullAccessWarning(provider);
 }
 
+const EFFORT_LABELS = {
+  "": "پیش‌فرض مدل",
+  low: "Low",
+  medium: "Medium",
+  high: "High",
+  xhigh: "Extra high",
+  max: "Max",
+  ultra: "Ultra",
+};
+
+function modelEntry(provider = state.settings.provider) {
+  const models = state.modelsByProvider[provider] || [];
+  const selected = state.settings.modelByProvider[provider] || "";
+  return (
+    models.find(
+      (candidate) => candidate.id === selected || candidate.model === selected,
+    ) || null
+  );
+}
+
+// Codex reports which efforts a model actually accepts; Claude's list carries no
+// metadata, so fall back to everything the provider will validate.
+// Codex reports each level as { reasoningEffort, description }; tolerate a bare
+// string too so the shape is not load-bearing.
+function normalizeEffort(entry) {
+  if (typeof entry === "string") return { value: entry, description: "" };
+  if (entry && typeof entry === "object") {
+    return {
+      value: String(entry.reasoningEffort || entry.effort || entry.id || ""),
+      description: String(entry.description || ""),
+    };
+  }
+  return { value: "", description: "" };
+}
+
+function effortsForCurrentModel(provider = state.settings.provider) {
+  const model = modelEntry(provider);
+  const supported = model?.supportedReasoningEfforts;
+  const entries =
+    Array.isArray(supported) && supported.length
+      ? supported.map(normalizeEffort)
+      : Object.keys(EFFORT_LABELS)
+          .filter((value) => value)
+          .map((value) => ({ value, description: "" }));
+  const allowed = entries.filter(
+    ({ value }) =>
+      EFFORT_LABELS[value] && (provider === "codex" || CLAUDE_EFFORTS.has(value)),
+  );
+  const fallbackLabel = model?.defaultReasoningEffort
+    ? `پیش‌فرض مدل (${EFFORT_LABELS[model.defaultReasoningEffort] || model.defaultReasoningEffort})`
+    : EFFORT_LABELS[""];
+  return [{ value: "", description: "", label: fallbackLabel }, ...allowed];
+}
+
 function updateModelLabel(provider = state.settings.provider) {
+  const selected = state.settings.modelByProvider[provider] || "";
+  const name = modelEntry(provider)?.displayName || selected || "مدل پیش‌فرض";
+  const effort = state.settings.effort;
+  elements.modelLabel.textContent =
+    effort && EFFORT_LABELS[effort] ? `${name} · ${EFFORT_LABELS[effort]}` : name;
+
+  // The topbar readout used to carry the open thread's real provider/cwd/model;
+  // keep that detail here rather than losing it with the readout.
+  const thread = state.currentThreadId ? state.currentThread : null;
+  const runtime = state.currentThreadId
+    ? state.threadRuntime.get(state.currentThreadId) || {}
+    : {};
+  elements.modelChip.title = thread
+    ? [
+        providerLabel(thread.provider || providerForThread(thread.id)),
+        runtime.model || thread.model || name,
+      ]
+        .filter(Boolean)
+        .join("  ·  ")
+    : `${name} — برای گفتگوی تازه`;
+  // Models arrive asynchronously, so an open menu has to pick them up.
+  renderRunChipMenu();
+}
+
+function buildChoiceRow({ value, label, selected, dataset }) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.setAttribute("role", "option");
+  button.setAttribute("aria-selected", String(selected));
+  button.className = `project-item ${selected ? "active" : ""}`;
+  button.dataset[dataset] = value;
+
+  const check = document.createElement("span");
+  check.className = "project-item-check";
+  check.textContent = selected ? "✓" : "";
+  check.setAttribute("aria-hidden", "true");
+
+  const name = document.createElement("span");
+  name.className = "project-item-name";
+  name.textContent = label;
+  button.append(check, name);
+  return button;
+}
+
+function renderRunChipMenu() {
+  const provider = state.settings.provider;
   const models = state.modelsByProvider[provider] || [];
   const selectedModel = state.settings.modelByProvider[provider] || "";
-  const model = models.find(
-    (candidate) =>
-      candidate.id === selectedModel || candidate.model === selectedModel,
-  );
-  elements.modelLabel.textContent = model?.displayName || selectedModel || "مدل پیش‌فرض";
+
+  elements.providerOptions.replaceChildren();
+  for (const candidate of ["codex", "claude"]) {
+    elements.providerOptions.append(
+      buildChoiceRow({
+        value: candidate,
+        label: candidate === "claude" ? "Claude Code CLI" : "Codex CLI",
+        selected: candidate === provider,
+        dataset: "providerValue",
+      }),
+    );
+  }
+  // An open conversation keeps the provider it was started with.
+  elements.providerNote.classList.toggle("hidden", !state.currentThreadId);
+
+  elements.modelOptions.replaceChildren();
+  for (const model of [{ model: "", displayName: `پیش‌فرض ${providerLabel(provider)}` }, ...models]) {
+    const value = model.model || model.id || "";
+    elements.modelOptions.append(
+      buildChoiceRow({
+        value,
+        label: `${model.displayName}${model.isDefault ? " — پیش‌فرض" : ""}`,
+        selected: value === selectedModel,
+        dataset: "modelValue",
+      }),
+    );
+  }
+
+  elements.effortOptions.replaceChildren();
+  for (const entry of effortsForCurrentModel(provider)) {
+    const button = document.createElement("button");
+    button.type = "button";
+    const selected = entry.value === (state.settings.effort || "");
+    button.className = `effort-option ${selected ? "active" : ""}`;
+    button.dataset.effortValue = entry.value;
+    button.setAttribute("aria-pressed", String(selected));
+    button.textContent = entry.label || EFFORT_LABELS[entry.value];
+    if (entry.description) button.title = entry.description;
+    elements.effortOptions.append(button);
+  }
+}
+
+function setRunProvider(provider) {
+  if (provider !== "codex" && provider !== "claude") return;
+  if (provider === state.settings.provider) return;
+  state.settings.provider = provider;
+  persistSettings();
+  state.models = state.modelsByProvider[provider] || [];
+  updateSettingsUi();
+  updateConnection();
+  void loadModels(provider);
+  void refreshProviderStatus();
+}
+
+function setRunSetting({ model, effort }) {
+  if (model !== undefined) {
+    state.settings.modelByProvider = {
+      ...state.settings.modelByProvider,
+      [state.settings.provider]: model,
+    };
+  }
+  if (effort !== undefined) state.settings.effort = effort;
+  persistSettings();
+  updateSettingsUi();
 }
 
 function updateSettingsUi() {
@@ -2149,16 +2320,13 @@ function updateSettingsUi() {
   state.models = state.modelsByProvider[provider] || [];
   const selectedModel = state.settings.modelByProvider[provider] || "";
   elements.cwdInput.value = state.settings.cwd;
-  const cwd = composerCwd();
-  elements.cwdLabel.textContent = shortPath(cwd, 38);
-  elements.cwdLabel.title = cwd;
+  updateProjectChip();
   void refreshAgentCommands();
   elements.providerSelect.value = provider;
   renderModelOptions(state.models, selectedModel, provider);
   elements.effortSelect.value = state.settings.effort;
   elements.sandboxSelect.value = state.settings.sandbox;
   elements.approvalSelect.value = state.settings.approvalPolicy;
-  elements.personalitySelect.value = state.settings.personality;
   elements.claudePermissionMode.value = state.settings.claudePermissionMode;
   for (const input of document.querySelectorAll('input[name="accent-palette"]')) {
     input.checked = input.value === state.settings.palette;
@@ -2210,7 +2378,6 @@ function saveSettings() {
         (input) => input.checked,
       )?.value ||
       defaultSettings.palette,
-    personality: elements.personalitySelect.value,
     provider,
     sandbox: elements.sandboxSelect.value,
     sidebarCollapsed: state.settings.sidebarCollapsed,
@@ -2232,13 +2399,73 @@ function formatRelativeTime(seconds) {
   const minute = 60_000;
   const hour = 60 * minute;
   const day = 24 * hour;
+  const fa = (value) => value.toLocaleString("fa-IR");
   if (elapsed < minute) return "اکنون";
-  if (elapsed < hour) return `${Math.floor(elapsed / minute)} دقیقه`;
-  if (elapsed < day) return `${Math.floor(elapsed / hour)} ساعت`;
-  if (elapsed < 7 * day) return `${Math.floor(elapsed / day)} روز`;
+  if (elapsed < hour) return `${fa(Math.floor(elapsed / minute))} دقیقه`;
+  if (elapsed < day) return `${fa(Math.floor(elapsed / hour))} ساعت`;
+  if (elapsed < 7 * day) return `${fa(Math.floor(elapsed / day))} روز`;
   return new Intl.DateTimeFormat("fa-IR", { month: "short", day: "numeric" }).format(
     seconds * 1000,
   );
+}
+
+// Neither provider timestamps individual messages — Codex does not record it at
+// all, and Claude keeps it only in its own transcript. Both do report when a
+// turn started and finished, in seconds, so time is shown at turn boundaries.
+function formatClockTime(seconds) {
+  if (!seconds) return "";
+  return new Intl.DateTimeFormat("fa-IR", {
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(seconds * 1000);
+}
+
+function formatDuration(seconds) {
+  if (!Number.isFinite(seconds) || seconds < 1) return "";
+  const fa = (value) => value.toLocaleString("fa-IR");
+  if (seconds < 60) return `${fa(Math.round(seconds))} ثانیه`;
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${fa(minutes)} دقیقه`;
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return rest ? `${fa(hours)} ساعت و ${fa(rest)} دقیقه` : `${fa(hours)} ساعت`;
+}
+
+function turnDurationSeconds(timing) {
+  if (!timing) return null;
+  if (Number.isFinite(timing.durationMs)) return timing.durationMs / 1000;
+  if (timing.startedAt && timing.completedAt) {
+    return timing.completedAt - timing.startedAt;
+  }
+  return null;
+}
+
+function applyTurnTiming(turnId) {
+  const timing = state.turnTimings.get(turnId);
+  if (!timing) return;
+  const clock = formatClockTime(timing.startedAt);
+  const duration = formatDuration(turnDurationSeconds(timing));
+  for (const row of elements.messages.querySelectorAll(".message-row")) {
+    if (row.dataset.turnId !== turnId) continue;
+    const slot = row.querySelector(".message-time");
+    if (!slot) continue;
+    const assistant = row.classList.contains("assistant");
+    // The clock marks when the exchange began; the duration is only meaningful
+    // once the answer has landed.
+    const text = assistant ? duration : clock;
+    slot.textContent = text;
+    if (timing.startedAt) {
+      slot.dateTime = new Date(timing.startedAt * 1000).toISOString();
+    }
+    slot.title = assistant && clock ? `شروع ${clock}` : "";
+  }
+}
+
+function recordTurnTiming(turnId, patch) {
+  if (!turnId) return;
+  const current = state.turnTimings.get(turnId) || {};
+  state.turnTimings.set(turnId, { ...current, ...patch });
+  applyTurnTiming(turnId);
 }
 
 function threadDisplayTitle(thread) {
@@ -2251,6 +2478,70 @@ function threadDisplayTitle(thread) {
 
 function projectById(projectId) {
   return state.projects.find((project) => project.id === projectId) || null;
+}
+
+function normalizeCwd(value) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  const withoutTrailing = text.replace(/[\\/]+$/, "");
+  return withoutTrailing || text;
+}
+
+// Threads are only linked to a project when the user assigns one explicitly, so
+// fall back to matching the thread's cwd against project folders. An exact match
+// wins over a parent folder, and a deeper parent wins over a shallower one.
+function resolveThreadProject(thread) {
+  if (!thread) return null;
+  const explicit = state.threadProjects.get(thread.id);
+  if (explicit && projectById(explicit)) return explicit;
+  const cwd = normalizeCwd(thread.cwd);
+  if (!cwd) return null;
+  let bestId = null;
+  let bestLength = -1;
+  for (const project of state.projects) {
+    const base = normalizeCwd(project.cwd);
+    if (!base) continue;
+    if (cwd !== base && !cwd.startsWith(`${base}/`) && !cwd.startsWith(`${base}\\`)) {
+      continue;
+    }
+    if (base.length > bestLength) {
+      bestId = project.id;
+      bestLength = base.length;
+    }
+  }
+  return bestId;
+}
+
+// Conversation timestamps are seconds, so keep this in the same unit.
+function nowInSeconds() {
+  return Math.floor(Date.now() / 1000);
+}
+
+function rememberThreadOpened(threadId) {
+  if (!threadId) return;
+  state.lastOpenedAt[threadId] = nowInSeconds();
+  const entries = Object.entries(state.lastOpenedAt).sort(
+    (left, right) => right[1] - left[1],
+  );
+  if (entries.length > LAST_OPENED_LIMIT) {
+    state.lastOpenedAt = Object.fromEntries(entries.slice(0, LAST_OPENED_LIMIT));
+  }
+  try {
+    localStorage.setItem(LAST_OPENED_KEY, JSON.stringify(state.lastOpenedAt));
+  } catch {
+    // Recency still works for this tab when storage is unavailable.
+  }
+}
+
+// Reading a conversation never bumps its updatedAt, so recency has to combine
+// what the agent did with what the user last looked at.
+function lastActiveAt(thread) {
+  return Math.max(thread.updatedAt || 0, state.lastOpenedAt[thread.id] || 0);
+}
+
+function threadsForProject(projectId) {
+  if (!projectId) return state.threads;
+  return state.threads.filter((thread) => resolveThreadProject(thread) === projectId);
 }
 
 function projectIdFor(key = draftKey()) {
@@ -2287,54 +2578,275 @@ function persistActiveProject() {
   }
 }
 
-function updateProjectHeader() {
-  const project = currentProject();
-  elements.headerProjectLabel.textContent = project?.name || "پروژه";
-  elements.headerProject.classList.toggle("assigned", Boolean(project));
-  elements.headerProject.title = project
-    ? `پروژه: ${project.name}`
-    : "افزودن گفتگو به پروژه";
+function updateShareAvailability() {
   elements.shareChat.disabled = !state.currentThreadId;
 }
 
-function renderProjects() {
-  elements.projectList.replaceChildren();
-  elements.projectAll.classList.toggle("active", !state.activeProjectId);
-  const counts = new Map();
-  for (const projectId of state.threadProjects.values()) {
-    counts.set(projectId, (counts.get(projectId) || 0) + 1);
-  }
-  for (const project of state.projects) {
+// The chip names the project this conversation runs in. When the project was
+// only inferred from the folder it says so, because project instructions are
+// not applied until the assignment is made explicit.
+function updateProjectChip() {
+  const assigned = currentProject();
+  const thread = state.currentThreadId ? threadById(state.currentThreadId) : null;
+  const inferred = assigned ? null : projectById(resolveThreadProject(thread));
+  const project = assigned || inferred;
+  const cwd = composerCwd();
+
+  elements.projectChipLabel.textContent = project ? project.name : shortPath(cwd, 38);
+  elements.projectChipHint.classList.toggle("hidden", !inferred);
+  elements.projectChip.classList.toggle("inferred", Boolean(inferred));
+  elements.projectChip.classList.toggle("assigned", Boolean(assigned));
+  elements.projectChip.title = project
+    ? `${project.name} — ${project.cwd}`
+    : cwd;
+
+  updateShareAvailability();
+}
+
+// One popover component, two jobs: filtering the sidebar list, and setting the
+// project a conversation runs in.
+const projectMenus = [
+  {
+    mode: "filter",
+    trigger: elements.projectSwitcher,
+    menu: elements.projectSwitcherMenu,
+    filter: elements.projectSwitcherFilter,
+    list: elements.projectList,
+    empty: elements.projectSwitcherEmpty,
+    showCwd: false,
+  },
+  {
+    mode: "assign",
+    trigger: elements.projectChip,
+    menu: elements.projectChipMenu,
+    filter: elements.projectChipFilter,
+    list: elements.projectChipList,
+    empty: elements.projectChipEmpty,
+    showCwd: true,
+  },
+];
+
+function selectedProjectIdFor(mode) {
+  return (mode === "assign" ? projectIdFor() : state.activeProjectId) || "";
+}
+
+function projectHasActivity(projectId) {
+  return state.threads.some((thread) => {
+    if (resolveThreadProject(thread) !== projectId) return false;
+    const phase = state.threadActivity.get(thread.id)?.phase;
+    return phase === "running" || phase === "needs-input";
+  });
+}
+
+// How many recently used projects sit above the divider.
+const PROJECT_MENU_RECENT_COUNT = 3;
+
+function renderProjectMenu(descriptor, counts, lastUsed) {
+  descriptor.list.replaceChildren();
+  const filter = descriptor.filter.value.trim().toLowerCase();
+  const selectedId = selectedProjectIdFor(descriptor.mode);
+  const assigning = descriptor.mode === "assign";
+
+  const makeRow = (project) => {
     const row = document.createElement("div");
     row.className = "project-row";
     const button = document.createElement("button");
     button.type = "button";
-    button.className = `project-item ${
-      project.id === state.activeProjectId ? "active" : ""
-    }`;
+    button.setAttribute("role", "option");
+    const selected = project.id === selectedId;
+    button.setAttribute("aria-selected", String(selected));
+    button.className = `project-item ${selected ? "active" : ""}`;
     button.dataset.projectId = project.id;
-    button.innerHTML = `
-      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 6.5h6l2 2h9v9a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z" /></svg>
-    `;
+
+    const check = document.createElement("span");
+    check.className = "project-item-check";
+    check.textContent = selected ? "✓" : "";
+    check.setAttribute("aria-hidden", "true");
+
+    const copy = document.createElement("span");
+    copy.className = "project-item-copy";
     const name = document.createElement("span");
     name.className = "project-item-name";
     name.dir = "auto";
     name.textContent = project.name;
-    const count = document.createElement("span");
-    count.className = "project-item-count";
-    count.textContent = (counts.get(project.id) || 0).toLocaleString("fa-IR");
-    button.append(name, count);
-    const edit = document.createElement("button");
-    edit.type = "button";
-    edit.className = "project-item-edit";
-    edit.dataset.projectEdit = project.id;
-    edit.setAttribute("aria-label", `ویرایش پروژهٔ ${project.name}`);
-    edit.title = "ویرایش پروژه";
-    edit.textContent = "⋯";
-    row.append(button, edit);
-    elements.projectList.append(row);
+    copy.append(name);
+    // Picking where a conversation runs needs the folder; filtering does not.
+    // Every folder here shares a long prefix, so only the tail carries signal.
+    if (descriptor.showCwd && project.cwd) {
+      const cwd = document.createElement("small");
+      cwd.className = "project-item-cwd";
+      cwd.dir = "ltr";
+      cwd.textContent = shortPath(project.cwd, 28);
+      copy.append(cwd);
+    }
+    if (project.cwd) button.title = project.cwd;
+
+    button.append(check, copy);
+    if (project.id && projectHasActivity(project.id)) {
+      const dot = document.createElement("span");
+      dot.className = "project-item-activity";
+      dot.title = "این پروژه گفتگوی فعال دارد";
+      dot.setAttribute("aria-label", "گفتگوی فعال");
+      button.append(dot);
+    }
+    // The conversation count answers "what am I browsing", not "where should
+    // this run", so it only belongs in the sidebar filter.
+    if (!assigning) {
+      const count = document.createElement("span");
+      count.className = "project-item-count";
+      count.textContent = project.count.toLocaleString("fa-IR");
+      button.append(count);
+    }
+    row.append(button);
+
+    if (project.id) {
+      const edit = document.createElement("button");
+      edit.type = "button";
+      edit.className = "project-item-edit";
+      edit.dataset.projectEdit = project.id;
+      edit.setAttribute("aria-label", `ویرایش پروژهٔ ${project.name}`);
+      edit.title = "ویرایش پروژه";
+      edit.textContent = "⋯";
+      row.append(edit);
+    }
+    return row;
+  };
+
+  const fallbackRow = {
+    id: "",
+    name: assigning ? "بدون پروژه" : "همهٔ گفتگوها",
+    cwd: "",
+    count: state.threads.length,
+  };
+  // Most recently worked in first — with many projects that is almost always
+  // the one being reached for.
+  const projects = state.projects
+    .map((project) => ({ ...project, count: counts.get(project.id) || 0 }))
+    .sort((left, right) => (lastUsed.get(right.id) || 0) - (lastUsed.get(left.id) || 0));
+
+  const rows = (assigning ? [...projects, fallbackRow] : [fallbackRow, ...projects]).filter(
+    (project) =>
+      !filter ||
+      !project.id ||
+      `${project.name} ${project.cwd || ""}`.toLowerCase().includes(filter),
+  );
+
+  const dividerAfter =
+    !filter && assigning && rows.length > PROJECT_MENU_RECENT_COUNT + 1
+      ? PROJECT_MENU_RECENT_COUNT
+      : -1;
+  rows.forEach((project, index) => {
+    descriptor.list.append(makeRow(project));
+    if (index === dividerAfter - 1) {
+      const divider = document.createElement("div");
+      divider.className = "project-menu-divider";
+      divider.setAttribute("aria-hidden", "true");
+      descriptor.list.append(divider);
+    }
+  });
+  descriptor.empty.classList.toggle("hidden", rows.length > 0);
+  highlightProjectRow(descriptor, 0);
+}
+
+function renderProjects() {
+  const counts = new Map();
+  const lastUsed = new Map();
+  for (const thread of state.threads) {
+    const projectId = resolveThreadProject(thread);
+    if (!projectId) continue;
+    counts.set(projectId, (counts.get(projectId) || 0) + 1);
+    const at = thread.updatedAt || thread.createdAt || 0;
+    if (at > (lastUsed.get(projectId) || 0)) lastUsed.set(projectId, at);
   }
-  updateProjectHeader();
+  for (const descriptor of projectMenus) {
+    renderProjectMenu(descriptor, counts, lastUsed);
+  }
+
+  const active = projectById(state.activeProjectId);
+  elements.projectSwitcherName.textContent = active ? active.name : "همهٔ گفتگوها";
+  elements.projectSwitcherCount.textContent = (
+    active ? counts.get(active.id) || 0 : state.threads.length
+  ).toLocaleString("fa-IR");
+  elements.projectSwitcher.title = active?.cwd || "فیلتر بر اساس پروژه";
+  updateProjectChip();
+}
+
+const runChipMenu = {
+  mode: "run",
+  trigger: elements.modelChip,
+  menu: elements.runChipMenu,
+};
+
+function allChipMenus() {
+  return [...projectMenus, runChipMenu];
+}
+
+function projectRowsIn(descriptor) {
+  return [...descriptor.list.querySelectorAll("[data-project-id]")];
+}
+
+function highlightProjectRow(descriptor, index) {
+  const rows = projectRowsIn(descriptor);
+  if (!rows.length) {
+    descriptor.activeIndex = 0;
+    return;
+  }
+  const next = Math.max(0, Math.min(index, rows.length - 1));
+  descriptor.activeIndex = next;
+  rows.forEach((row, position) => {
+    row.classList.toggle("highlighted", position === next);
+  });
+  rows[next].scrollIntoView?.({ block: "nearest" });
+}
+
+function moveProjectHighlight(descriptor, delta) {
+  const rows = projectRowsIn(descriptor);
+  if (!rows.length) return;
+  const current = descriptor.activeIndex || 0;
+  // Wrap, so holding one arrow key always reaches every row.
+  const next = (current + delta + rows.length) % rows.length;
+  highlightProjectRow(descriptor, next);
+}
+
+function activateHighlightedProject(descriptor) {
+  const rows = projectRowsIn(descriptor);
+  const row = rows[descriptor.activeIndex || 0];
+  if (row) row.click();
+}
+
+function menuIsOpen(descriptor) {
+  return !descriptor.menu.classList.contains("hidden");
+}
+
+function openProjectMenu(descriptor) {
+  for (const other of allChipMenus()) {
+    if (other !== descriptor) closeProjectMenu(other);
+  }
+  descriptor.menu.classList.remove("hidden");
+  descriptor.trigger.setAttribute("aria-expanded", "true");
+  if (descriptor.mode === "run") renderRunChipMenu();
+  else renderProjects();
+  if (descriptor.filter) setTimeout(() => descriptor.filter.focus(), 0);
+}
+
+function closeProjectMenu(descriptor, { focusTrigger = false } = {}) {
+  if (!menuIsOpen(descriptor)) return;
+  descriptor.menu.classList.add("hidden");
+  descriptor.trigger.setAttribute("aria-expanded", "false");
+  if (descriptor.filter) {
+    descriptor.filter.value = "";
+    renderProjects();
+  }
+  if (focusTrigger) descriptor.trigger.focus();
+}
+
+function closeProjectMenus() {
+  for (const descriptor of allChipMenus()) closeProjectMenu(descriptor);
+}
+
+function toggleProjectMenu(descriptor) {
+  if (menuIsOpen(descriptor)) closeProjectMenu(descriptor, { focusTrigger: true });
+  else openProjectMenu(descriptor);
 }
 
 async function loadProjects() {
@@ -2390,8 +2902,14 @@ async function saveProject(event) {
     });
     elements.projectDialog.close();
     await loadProjects();
-    if (!projectId) selectProject(result.project.id);
-    else updateProjectHeader();
+    if (!projectId) {
+      selectProject(result.project.id);
+      state.lastProjectId = result.project.id;
+      persistLastProject(result.project.id);
+      newChat({ projectId: result.project.id });
+    } else {
+      updateProjectChip();
+    }
   } catch (error) {
     showError(error, projectId ? "ویرایش پروژه" : "ساخت پروژه");
   } finally {
@@ -2413,8 +2931,12 @@ async function deleteProject() {
       state.activeProjectId = null;
       persistActiveProject();
     }
+    if (state.lastProjectId === projectId) {
+      state.lastProjectId = null;
+      persistLastProject(null);
+    }
     await loadProjects();
-    updateProjectHeader();
+    updateProjectChip();
   } catch (error) {
     showError(error, "حذف پروژه");
   } finally {
@@ -2425,75 +2947,38 @@ async function deleteProject() {
 function selectProject(projectId) {
   const nextProjectId = projectId && projectById(projectId) ? projectId : null;
   state.activeProjectId = nextProjectId;
+  state.threadListLimit = THREAD_LIST_PAGE_SIZE;
   persistActiveProject();
+  closeProjectMenus();
   renderProjects();
   renderThreadList();
-  const currentMatches =
-    state.currentThreadId &&
-    (state.threadProjects.get(state.currentThreadId) || null) === nextProjectId;
-  if (nextProjectId && !currentMatches) newChat({ projectId: nextProjectId });
-  else closeSidebar();
 }
 
-function renderAssignProjectOptions() {
-  elements.assignProjectOptions.replaceChildren();
-  const assignedId = projectIdFor();
-  const options = [
-    { id: "", name: "بدون پروژه", cwd: "در فهرست عمومی گفتگوها" },
-    ...state.projects,
-  ];
-  for (const project of options) {
-    const label = document.createElement("label");
-    label.className = "assign-project-option";
-    const input = document.createElement("input");
-    input.type = "radio";
-    input.name = "assigned-project";
-    input.value = project.id;
-    input.checked = project.id === (assignedId || "");
-    const copy = document.createElement("span");
-    const name = document.createElement("strong");
-    name.textContent = project.name;
-    const cwd = document.createElement("small");
-    cwd.textContent = project.cwd;
-    copy.append(name, cwd);
-    label.append(input, copy);
-    elements.assignProjectOptions.append(label);
-  }
-}
-
-function openAssignProjectDialog() {
-  renderAssignProjectOptions();
-  elements.assignProjectDialog.showModal();
-}
-
-async function saveProjectAssignment(event) {
-  event.preventDefault();
-  const selected = elements.assignProjectOptions.querySelector(
-    'input[name="assigned-project"]:checked',
-  );
-  const projectId = selected?.value || null;
-  elements.assignProjectSave.disabled = true;
+async function assignChatProject(projectId) {
+  const nextId = projectId && projectById(projectId) ? projectId : null;
   try {
     if (state.currentThreadId) {
       await api("/api/project-threads", {
         method: "POST",
-        body: JSON.stringify({ threadId: state.currentThreadId, projectId }),
+        body: JSON.stringify({ threadId: state.currentThreadId, projectId: nextId }),
       });
-      if (projectId) state.threadProjects.set(state.currentThreadId, projectId);
+      if (nextId) state.threadProjects.set(state.currentThreadId, nextId);
       else state.threadProjects.delete(state.currentThreadId);
     } else {
       const key = draftKey();
-      if (projectId) state.draftProjects.set(key, projectId);
+      if (nextId) state.draftProjects.set(key, nextId);
       else state.draftProjects.delete(key);
     }
-    elements.assignProjectDialog.close();
+    state.lastProjectId = nextId;
+    persistLastProject(nextId);
     renderProjects();
     renderThreadList();
-    updateProjectHeader();
+    // The chip label and the welcome copy both derive from the project, and
+    // each is only refreshed by one of these.
+    updateSettingsUi();
+    updateConnection();
   } catch (error) {
     showError(error, "تغییر پروژهٔ گفتگو");
-  } finally {
-    elements.assignProjectSave.disabled = false;
   }
 }
 
@@ -2809,79 +3294,170 @@ function announceThreadCompletion(threadId, status) {
   }
 }
 
+// The row is two lines on purpose. Sharing one line, the title competed with a
+// provider badge, an activity pill and a timestamp and was left ~80px — about
+// ten Persian characters. Giving it a line of its own restores ~254px.
+function buildThreadItem(thread, { showProject = false } = {}) {
+  const button = document.createElement("button");
+  button.className = `thread-item ${thread.id === state.currentThreadId ? "active" : ""}`;
+  button.dataset.threadId = thread.id;
+
+  const title = document.createElement("span");
+  title.className = "thread-item-title";
+  title.dir = "auto";
+  title.textContent = threadDisplayTitle(thread);
+
+  const heading = document.createElement("span");
+  heading.className = "thread-item-heading";
+  heading.append(title);
+
+  // Needing an answer is the one thing worth stealing title width for.
+  const presentation = threadActivityPresentation(thread.id);
+  if (presentation) {
+    const activity = document.createElement("span");
+    activity.className = `thread-activity ${presentation.className}`;
+    activity.textContent = presentation.label;
+    activity.setAttribute("aria-label", presentation.label);
+    heading.append(activity);
+  }
+  button.append(heading);
+
+  const meta = document.createElement("span");
+  meta.className = "thread-item-meta";
+  const origin = document.createElement("span");
+  origin.className = "thread-item-origin";
+
+  if (showProject) {
+    const project = projectById(resolveThreadProject(thread));
+    const label = document.createElement("span");
+    label.className = "thread-item-project";
+    label.dir = "auto";
+    label.textContent = project ? project.name : shortPath(thread.cwd, 23);
+    label.title = thread.cwd || "";
+    origin.append(label);
+    const separator = document.createElement("span");
+    separator.className = "thread-item-separator";
+    separator.setAttribute("aria-hidden", "true");
+    separator.textContent = "·";
+    origin.append(separator);
+  }
+
+  const provider = document.createElement("span");
+  provider.className = "thread-provider";
+  provider.dir = "ltr";
+  provider.textContent = thread.provider === "claude" ? "Claude" : "Codex";
+  provider.title = thread.provider === "claude" ? "Claude Code CLI" : "Codex CLI";
+  origin.append(provider);
+
+  const time = document.createElement("span");
+  time.className = "thread-item-time";
+  time.textContent = formatRelativeTime(thread.updatedAt || thread.createdAt);
+  meta.append(origin, time);
+  button.append(meta);
+  return button;
+}
+
+function threadIsBusy(threadId) {
+  const phase = state.threadActivity.get(threadId)?.phase;
+  return phase === "running" || phase === "needs-input";
+}
+
+// A small board above the list for conversations the list itself cannot show:
+// anything working or waiting, plus the last few opened in another project so
+// that stepping away from a chat and back does not mean hunting for it.
+function pinnedThreads() {
+  const recentElsewhere = new Set(
+    [...state.threads]
+      .filter(
+        (thread) =>
+          state.activeProjectId &&
+          resolveThreadProject(thread) !== state.activeProjectId,
+      )
+      .sort((left, right) => lastActiveAt(right) - lastActiveAt(left))
+      .slice(0, PINNED_RECENT_COUNT)
+      .map((thread) => thread.id),
+  );
+  return state.threads
+    .filter((thread) => threadIsBusy(thread.id) || recentElsewhere.has(thread.id))
+    .sort((left, right) => {
+      const byBusy = Number(threadIsBusy(right.id)) - Number(threadIsBusy(left.id));
+      return byBusy || lastActiveAt(right) - lastActiveAt(left);
+    })
+    .slice(0, PINNED_LIMIT);
+}
+
 function renderThreadList() {
   elements.threadList.replaceChildren();
-  const threads = state.activeProjectId
-    ? state.threads.filter(
-        (thread) => state.threadProjects.get(thread.id) === state.activeProjectId,
-      )
-    : state.threads;
+  const searching = Boolean(elements.threadSearch.value.trim());
+  // Search always spans every project; browsing is scoped to the selected one.
+  const scoped = searching ? state.threads : threadsForProject(state.activeProjectId);
+  const pinned = searching ? [] : pinnedThreads();
+  const pinnedIds = new Set(pinned.map((thread) => thread.id));
+  // A pinned conversation moves to the board instead of appearing twice.
+  const threads = scoped.filter((thread) => !pinnedIds.has(thread.id));
+
+  if (pinned.length) {
+    const section = document.createElement("div");
+    section.className = "thread-pinned";
+    const heading = document.createElement("div");
+    heading.className = "thread-pinned-heading";
+    heading.textContent = "فعال و اخیر";
+    section.append(heading);
+    for (const thread of pinned) {
+      section.append(buildThreadItem(thread, { showProject: true }));
+    }
+    elements.threadList.append(section);
+  }
+
   if (!threads.length) {
-    const empty = document.createElement("div");
-    empty.className = "thread-empty";
-    empty.textContent = state.activeProjectId
-      ? "هنوز گفتگویی در این پروژه نیست."
-      : "هنوز گفتگویی پیدا نشد.";
-    elements.threadList.append(empty);
+    if (!pinned.length) {
+      const empty = document.createElement("div");
+      empty.className = "thread-empty";
+      empty.textContent = searching
+        ? "گفتگویی با این جستجو پیدا نشد."
+        : state.activeProjectId
+          ? "هنوز گفتگویی در این پروژه نیست."
+          : "هنوز گفتگویی پیدا نشد.";
+      elements.threadList.append(empty);
+    }
     return;
   }
 
   for (const thread of threads) {
-    const button = document.createElement("button");
-    button.className = `thread-item ${thread.id === state.currentThreadId ? "active" : ""}`;
-    button.dataset.threadId = thread.id;
+    elements.threadList.append(
+      buildThreadItem(thread, {
+        showProject: searching || !state.activeProjectId,
+      }),
+    );
+  }
 
-    const title = document.createElement("span");
-    title.className = "thread-item-title";
-    title.dir = "auto";
-    title.textContent = threadDisplayTitle(thread);
-
-    const provider = document.createElement("span");
-    provider.className = "thread-provider";
-    provider.dir = "ltr";
-    provider.textContent = thread.provider === "claude" ? "Claude" : "Codex";
-    provider.title = thread.provider === "claude" ? "Claude Code CLI" : "Codex CLI";
-
-    const heading = document.createElement("span");
-    heading.className = "thread-item-heading";
-    heading.append(title, provider);
-    const presentation = threadActivityPresentation(thread.id);
-    if (presentation) {
-      const activity = document.createElement("span");
-      activity.className = `thread-activity ${presentation.className}`;
-      activity.textContent = presentation.label;
-      activity.setAttribute("aria-label", presentation.label);
-      heading.append(activity);
-    }
-
-    const meta = document.createElement("span");
-    meta.className = "thread-item-meta";
-    const cwd = document.createElement("span");
-    cwd.className = "thread-item-cwd";
-    cwd.textContent = shortPath(thread.cwd, 23);
-    cwd.title = thread.cwd || "";
-    const time = document.createElement("span");
-    time.textContent = formatRelativeTime(thread.updatedAt || thread.createdAt);
-    meta.append(cwd, time);
-
-    button.append(heading, meta);
-    elements.threadList.append(button);
+  if (state.threadListHasMore && !searching) {
+    const more = document.createElement("button");
+    more.className = "thread-load-more";
+    more.id = "thread-load-more";
+    more.type = "button";
+    more.textContent = "موارد قدیمی‌تر";
+    elements.threadList.append(more);
   }
 }
 
 async function refreshThreads(searchTerm = elements.threadSearch.value.trim()) {
   const refreshVersion = ++state.threadsRefreshVersion;
+  const limit = state.threadListLimit;
   try {
     const result = await rpc("thread/list", {
       archived: false,
-      limit: 100,
+      limit,
       searchTerm: searchTerm || null,
       sortDirection: "desc",
       sortKey: "updated_at",
     });
     if (refreshVersion !== state.threadsRefreshVersion) return;
     state.threads = result.data || [];
+    // Neither provider returns a cursor, so a full page means there may be more.
+    state.threadListHasMore = state.threads.length >= limit;
     for (const thread of state.threads) syncThreadActivity(thread);
+    renderProjects();
     renderThreadList();
     updateAttentionUi();
   } catch (error) {
@@ -2890,7 +3466,13 @@ async function refreshThreads(searchTerm = elements.threadSearch.value.trim()) {
   }
 }
 
+async function loadMoreThreads() {
+  state.threadListLimit += THREAD_LIST_PAGE_SIZE;
+  await refreshThreads();
+}
+
 function clearConversation() {
+  state.turnTimings.clear();
   closeSlashCommandMenu();
   resetScrollFollowing();
   if (state.userMessageNavigationFrame !== null) {
@@ -3543,10 +4125,24 @@ function restoreCurrentViewUrl() {
   }
 }
 
+// Where a new conversation starts, in order:
+//   1. the sidebar filter, when it is narrowed to one project — starting a chat
+//      while browsing a project almost always means starting it there;
+//   2. otherwise the project last chosen from the composer chip;
+//   3. otherwise no project.
+// A caller passing projectId explicitly (creating a project) overrides all of it.
+function defaultProjectForNewChat() {
+  if (state.activeProjectId && projectById(state.activeProjectId)) {
+    return state.activeProjectId;
+  }
+  if (state.lastProjectId === undefined) return null;
+  return state.lastProjectId;
+}
+
 function newChat({
   draftId = null,
   historyMode = "push",
-  projectId = state.activeProjectId,
+  projectId = defaultProjectForNewChat(),
 } = {}) {
   if (!state.currentThreadId && attachmentUploadsForDraft() > 0) {
     toast("برای حفظ فایل‌های این پیش‌نویس، تا پایان افزودن آن‌ها صبر کنید.", "warning");
@@ -3571,20 +4167,13 @@ function newChat({
   setBusy(false);
   clearConversation();
   elements.welcome.classList.remove("hidden");
-  const project = currentProject();
-  elements.welcomeTitle.textContent = project
-    ? `در پروژهٔ «${project.name}» روی چی کار کنیم؟`
-    : "امروز روی چی کار کنیم؟";
-  elements.welcomeDescription.textContent = project
-    ? "پوشه و دستورهای این پروژه برای گفتگوی تازه اعمال می‌شوند."
-    : "کد، فایل یا ایده‌ات را بفرست؛ ابزارهای فنی پشت صحنه آماده‌اند.";
+  updateAgentCopy(effectiveProvider());
   elements.threadTitle.textContent = "گفتگوی تازه";
-  elements.threadMeta.textContent = "";
   updateThreadUrl(null, historyMode, state.newDraftId);
   restoreDraft(null);
   renderThreadList();
   updateAttentionUi();
-  updateProjectHeader();
+  updateProjectChip();
   updateSettingsUi();
   updateConnection();
   closeSidebar();
@@ -3611,20 +4200,11 @@ function setCurrentThread(thread, metadata = {}) {
   syncThreadActivity(thread);
   markThreadSeen(thread.id);
   elements.threadTitle.textContent = threadDisplayTitle(thread);
-  const cwd = metadata.cwd || thread.cwd || state.settings.cwd;
-  const model = metadata.model || thread.model || "";
-  elements.threadMeta.textContent = [
-    providerLabel(thread.provider || providerForThread(thread.id)),
-    cwd,
-    model,
-  ]
-    .filter(Boolean)
-    .join("  ·  ");
   elements.welcome.classList.add("hidden");
   restoreDraft(thread.id);
   renderThreadList();
   activateThreadInteractions(thread.id);
-  updateProjectHeader();
+  updateProjectChip();
   updateSettingsUi();
   updateConnection();
   void loadGoal(thread.id);
@@ -3763,6 +4343,9 @@ function createMessageView(item, turnId = null, { continuation = false } = {}) {
     body.append(label);
   }
   body.append(content);
+  const time = document.createElement("time");
+  time.className = "message-time";
+  body.append(time);
   if (role === "assistant") body.append(createAssistantMessageActions());
   row.append(body);
   elements.messages.append(row);
@@ -4218,6 +4801,11 @@ function renderHistory(thread) {
         continuation: continuation && item.type === "agentMessage" && !isCommentaryItem(item),
       });
     }
+    recordTurnTiming(turn.id, {
+      startedAt: turn.startedAt,
+      completedAt: turn.completedAt,
+      durationMs: turn.durationMs,
+    });
     const processView = state.turnProcessViews.get(turn.id);
     if (processView) {
       setTurnProcessState(processView, turn.status === "inProgress", {
@@ -4268,6 +4856,7 @@ async function openThread(threadId, { historyMode = "push" } = {}) {
     return false;
   }
   const navigationVersion = ++state.navigationVersion;
+  rememberThreadOpened(threadId);
   if (threadId === state.currentThreadId) {
     state.openingThreadId = null;
     updateThreadUrl(threadId, historyMode);
@@ -4621,7 +5210,6 @@ async function ensureThread(sourceThreadId, navigationVersion, sourceDraftKey) {
     if (instructions) params.developerInstructions = instructions;
     if (state.settings.approvalPolicy) params.approvalPolicy = state.settings.approvalPolicy;
     if (state.settings.sandbox) params.sandbox = state.settings.sandbox;
-    if (state.settings.personality) params.personality = state.settings.personality;
   }
   const model = state.settings.modelByProvider[state.settings.provider] || "";
   if (model) params.model = model;
@@ -5068,6 +5656,9 @@ function handleNotification(message) {
 
   if (method === "turn/started" && threadId) {
     const turnId = params.turn?.id || null;
+    if (threadId === state.currentThreadId) {
+      recordTurnTiming(turnId, { startedAt: nowInSeconds() });
+    }
     state.compactPendingThreads.delete(threadId);
     updateThreadActivity(threadId, {
       phase: hasPendingInteractionForThread(threadId) ? "needs-input" : "running",
@@ -5087,6 +5678,9 @@ function handleNotification(message) {
     const turn = params.turn || {};
     const turnId = turn.id || "unknown";
     const key = turnEventKey(threadId, turnId);
+    if (threadId === state.currentThreadId) {
+      recordTurnTiming(turnId, { completedAt: nowInSeconds() });
+    }
     state.compactPendingThreads.delete(threadId);
     state.completedTurns.add(key);
 
@@ -5845,10 +6439,25 @@ async function refreshProviderStatus() {
   }
 }
 
+// The composer floats over the conversation, so the space the messages reserve
+// at the bottom has to follow its real height. A fixed reserve meant a grown
+// textarea buried the last messages with no way to scroll to them.
+function syncComposerHeight() {
+  const height = elements.composerWrap?.offsetHeight;
+  if (!Number.isFinite(height) || height <= 0) return;
+  const previous = state.composerHeight;
+  if (previous === height) return;
+  state.composerHeight = height;
+  document.documentElement.style.setProperty("--composer-height", `${height}px`);
+  // Growing the box would otherwise push the newest message out of sight.
+  if (previous !== null && height > previous) scheduleScrollToBottom();
+}
+
 function resizePrompt() {
   elements.prompt.style.height = "auto";
   elements.prompt.style.height = `${Math.min(elements.prompt.scrollHeight, 210)}px`;
   updateComposerControls();
+  syncComposerHeight();
 }
 
 function sidebarUsesOverlay() {
@@ -5897,6 +6506,15 @@ function collapseSidebar() {
 }
 
 let searchTimer;
+
+// Attachments, the prompt queue and the goal strip all change the composer's
+// height too, so observe the box rather than chasing each of them.
+if (typeof ResizeObserver === "function" && elements.composerWrap) {
+  new ResizeObserver(() => syncComposerHeight()).observe(elements.composerWrap);
+} else {
+  window.addEventListener("resize", syncComposerHeight);
+}
+syncComposerHeight();
 
 elements.prompt.addEventListener("input", () => {
   if (state.slashDismissedValue !== elements.prompt.value) {
@@ -6033,18 +6651,74 @@ elements.promptQueueItems.addEventListener("click", (event) => {
 elements.promptQueueClear.addEventListener("click", clearPromptQueue);
 elements.stopTurn.addEventListener("click", stopTurn);
 elements.newChat.addEventListener("click", () => newChat());
-elements.projectAdd.addEventListener("click", () => openProjectDialog());
-elements.projectAll.addEventListener("click", () => selectProject(null));
-elements.projectList.addEventListener("click", (event) => {
-  const edit = event.target.closest("[data-project-edit]");
-  if (edit) {
-    openProjectDialog(projectById(edit.dataset.projectEdit));
-    return;
-  }
-  const project = event.target.closest("[data-project-id]");
-  if (project) selectProject(project.dataset.projectId);
+elements.projectAdd.addEventListener("click", () => {
+  closeProjectMenus();
+  openProjectDialog();
+});
+elements.projectChipAdd.addEventListener("click", () => {
+  closeProjectMenus();
+  openProjectDialog();
+});
+for (const descriptor of projectMenus) {
+  descriptor.trigger.addEventListener("click", () => toggleProjectMenu(descriptor));
+  descriptor.filter.addEventListener("input", renderProjects);
+  descriptor.filter.addEventListener("keydown", (event) => {
+    if (event.isComposing) return;
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeProjectMenu(descriptor, { focusTrigger: true });
+      return;
+    }
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      moveProjectHighlight(descriptor, event.key === "ArrowDown" ? 1 : -1);
+      return;
+    }
+    if (event.key === "Enter") {
+      event.preventDefault();
+      activateHighlightedProject(descriptor);
+    }
+  });
+  descriptor.list.addEventListener("click", (event) => {
+    const edit = event.target.closest("[data-project-edit]");
+    if (edit) {
+      closeProjectMenu(descriptor);
+      openProjectDialog(projectById(edit.dataset.projectEdit));
+      return;
+    }
+    const project = event.target.closest("[data-project-id]");
+    if (!project) return;
+    const projectId = project.dataset.projectId || null;
+    closeProjectMenu(descriptor);
+    if (descriptor.mode === "assign") assignChatProject(projectId);
+    else selectProject(projectId);
+  });
+}
+elements.modelChip.addEventListener("click", () => toggleProjectMenu(runChipMenu));
+elements.providerOptions.addEventListener("click", (event) => {
+  const option = event.target.closest("[data-provider-value]");
+  if (!option) return;
+  setRunProvider(option.dataset.providerValue);
+});
+elements.modelOptions.addEventListener("click", (event) => {
+  const option = event.target.closest("[data-model-value]");
+  if (!option) return;
+  setRunSetting({ model: option.dataset.modelValue });
+});
+elements.effortOptions.addEventListener("click", (event) => {
+  const option = event.target.closest("[data-effort-value]");
+  if (!option) return;
+  setRunSetting({ effort: option.dataset.effortValue });
+});
+document.addEventListener("click", (event) => {
+  if (event.target.closest(".project-switcher")) return;
+  closeProjectMenus();
 });
 elements.threadList.addEventListener("click", (event) => {
+  if (event.target.closest("#thread-load-more")) {
+    loadMoreThreads();
+    return;
+  }
   const button = event.target.closest("[data-thread-id]");
   if (button) openThread(button.dataset.threadId);
 });
@@ -6063,24 +6737,15 @@ elements.usageDialog.addEventListener("close", () => {
   clearInterval(state.usageClockTimer);
   state.usageClockTimer = null;
 });
-elements.headerProject.addEventListener("click", openAssignProjectDialog);
 elements.shareChat.addEventListener("click", () => refreshShare());
 elements.projectForm.addEventListener("submit", saveProject);
 elements.projectCancel.addEventListener("click", () => elements.projectDialog.close());
 elements.projectDialogClose.addEventListener("click", () => elements.projectDialog.close());
 elements.projectDelete.addEventListener("click", deleteProject);
-elements.assignProjectForm.addEventListener("submit", saveProjectAssignment);
-elements.assignProjectCancel.addEventListener("click", () =>
-  elements.assignProjectDialog.close(),
-);
-elements.assignProjectClose.addEventListener("click", () =>
-  elements.assignProjectDialog.close(),
-);
 elements.shareDialogClose.addEventListener("click", () => elements.shareDialog.close());
 elements.shareCopy.addEventListener("click", copyShareLink);
 elements.shareRefresh.addEventListener("click", () => refreshShare({ open: false }));
 elements.shareRevoke.addEventListener("click", revokeShare);
-elements.cwdChip.addEventListener("click", () => openSettings());
 elements.saveSettings.addEventListener("click", (event) => {
   event.preventDefault();
   saveSettings();
@@ -6231,14 +6896,6 @@ elements.messages.addEventListener("click", async (event) => {
   } catch {
     toast("کپی‌کردن ممکن نبود.", "error");
   }
-});
-document.querySelectorAll("[data-prompt]").forEach((button) => {
-  button.addEventListener("click", () => {
-    elements.prompt.value = button.dataset.prompt;
-    saveCurrentDraft();
-    resizePrompt();
-    elements.prompt.focus();
-  });
 });
 
 async function initialize() {

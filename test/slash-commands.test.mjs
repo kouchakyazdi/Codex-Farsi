@@ -220,6 +220,9 @@ test("slash commands are accessible and stay isolated from model turns", async (
             name: "weekly-report",
             scope: "user",
           },
+          // Reported by the CLI itself: plugin skills carry a `plugin:` prefix.
+          { description: "", kind: "cli", name: "anthropic-skills:pdf", scope: "plugin" },
+          { description: "", kind: "cli", name: "clear", scope: "cli" },
         ],
         cwd: "/workspace",
         provider: "codex",
@@ -439,7 +442,7 @@ test("slash commands are accessible and stay isolated from model turns", async (
   assert.equal(rpcRequests.length, requestsBeforeDismissedSlash);
 
   assert.equal(
-    document.querySelector("#stop-turn").classList.contains("hidden"),
+    document.querySelector("#stop-turn").disabled,
     false,
     "the source thread should still be busy before /new",
   );
@@ -488,7 +491,7 @@ test("slash commands are accessible and stay isolated from model turns", async (
     },
   });
   await waitFor(
-    () => document.querySelector("#stop-turn").classList.contains("hidden"),
+    () => document.querySelector("#stop-turn").disabled,
     "the conversation stayed busy",
   );
 
@@ -534,6 +537,24 @@ test("slash commands are accessible and stay isolated from model turns", async (
       ),
     "the skill prompt was not shown in the conversation",
   );
+  typePrompt(window, prompt, "/anthropic-skills:p");
+  await waitFor(
+    () => options.querySelector("[data-slash-command='anthropic-skills:pdf']"),
+    "the CLI-reported plugin command was not listed",
+  );
+  assert.match(
+    options.querySelector("[data-slash-command='anthropic-skills:pdf'] .slash-command-kind")
+      .textContent,
+    /پلاگین/,
+  );
+  // A CLI command named like a web built-in is handled by the web, listed once.
+  typePrompt(window, prompt, "/clear");
+  assert.equal(options.querySelectorAll("[data-slash-command='clear']").length, 1);
+  assert.equal(
+    options.querySelector("[data-slash-command='clear'] .slash-command-kind"),
+    null,
+  );
+
   // Let the queued rendering frames run before the DOM globals are restored.
   for (let frame = 0; frame < 3; frame += 1) {
     await new Promise((resolve) => setTimeout(resolve, 0));

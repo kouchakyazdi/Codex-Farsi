@@ -6,6 +6,7 @@ import test from "node:test";
 
 import {
   agentCommandRoots,
+  cliCommandEntries,
   listAgentCommands,
   parseFrontmatter,
 } from "../agent-commands.mjs";
@@ -119,4 +120,19 @@ test("skills and prompt files are discovered per provider", async (t) => {
     }),
     [],
   );
+});
+
+test("CLI-reported commands are listed, minus internal and terminal-only ones", () => {
+  const entries = cliCommandEntries(
+    ["init", "heapdump", "__remote", "anthropic-skills:pdf", "weekly-report"],
+    { exclude: new Set(["weekly-report"]) },
+  );
+  assert.deepEqual(
+    entries.map(({ name, kind, scope }) => [name, kind, scope]),
+    [
+      ["init", "cli", "cli"],
+      ["anthropic-skills:pdf", "cli", "plugin"],
+    ],
+  );
+  assert.match(entries[0].description, /CLAUDE\.md/);
 });

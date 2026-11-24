@@ -487,7 +487,7 @@ test("submitted user message stays visible while the assistant is streaming", as
   assert.equal(document.querySelectorAll(".message-row.user").length, 2);
   resolveTurnStart();
   await waitFor(
-    () => document.querySelector("#stop-turn").classList.contains("hidden") === false,
+    () => document.querySelector("#stop-turn").disabled === false,
     "turn/start response was not handled",
   );
   FakeEventSource.latest.emit("rpc", {
@@ -593,10 +593,7 @@ test("submitted user message stays visible while the assistant is streaming", as
       ).length,
       1,
     );
-    assert.equal(
-      document.querySelector("#stop-turn").classList.contains("hidden"),
-      false,
-    );
+    assert.equal(document.querySelector("#stop-turn").disabled, false);
 
     resumedThread.turns.push({
       id: "turn-accepted",

@@ -27,10 +27,10 @@ export function codexHomeDir(env = process.env) {
 
 // Each root contributes `skills/<name>/SKILL.md` plus flat `<promptsDir>/<name>.md`
 // files. Project roots win over user roots when both define the same name.
-export function agentCommandRoots({ provider, cwd, env = process.env } = {}) {
+export function agentCommandRoots({ provider, cwd, env = process.env, claudeConfigDir: configDir } = {}) {
   const roots = [];
   if (provider === "claude") {
-    roots.push({ dir: claudeConfigDir(env), promptsDir: "commands", scope: "user" });
+    roots.push({ dir: configDir || claudeConfigDir(env), promptsDir: "commands", scope: "user" });
     if (cwd) roots.push({ dir: join(cwd, ".claude"), promptsDir: "commands", scope: "project" });
   } else {
     roots.push({ dir: codexHomeDir(env), promptsDir: "prompts", scope: "user" });
@@ -153,10 +153,16 @@ async function collectPrompts(root, provider, into) {
   }
 }
 
-export async function listAgentCommands({ provider, cwd = "", env = process.env } = {}) {
+export async function listAgentCommands({
+  provider,
+  cwd = "",
+  env = process.env,
+  claudeConfigDir: configDir,
+} = {}) {
   const normalizedProvider = provider === "claude" ? "claude" : "codex";
   const found = new Map();
-  for (const root of agentCommandRoots({ provider: normalizedProvider, cwd, env })) {
+  const roots = agentCommandRoots({ provider: normalizedProvider, cwd, env, claudeConfigDir: configDir });
+  for (const root of roots) {
     await collectSkills(root, normalizedProvider, found);
     await collectPrompts(root, normalizedProvider, found);
   }
@@ -166,7 +172,11 @@ export async function listAgentCommands({ provider, cwd = "", env = process.env 
 }
 
 export async function listAgentCommandsCached(options = {}) {
-  const key = `${options.provider === "claude" ? "claude" : "codex"}\u0000${options.cwd || ""}`;
+  const key = [
+    options.provider === "claude" ? "claude" : "codex",
+    options.claudeConfigDir || "",
+    options.cwd || "",
+  ].join("\u0000");
   const now = Date.now();
   const hit = cache.get(key);
   if (hit && now - hit.at < CACHE_TTL_MS) return hit.commands;
@@ -177,4 +187,62 @@ export async function listAgentCommandsCached(options = {}) {
 
 export function clearAgentCommandCache() {
   cache.clear();
+}
+
+// Commands Claude Code itself reports (see ClaudeProvider#cliCommandNames).
+// They run inside the CLI exactly as typed, so the web only lists them.
+// Until a profile has run once, this short list of built-ins that work in
+// headless mode stands in.
+export const CLAUDE_FALLBACK_CLI_COMMANDS = [
+  "init",
+  "security-review",
+  "context",
+  "insights",
+  "recap",
+  "mcp",
+  "agents",
+];
+
+// Built-ins that only make sense in the terminal UI, or are internal.
+const HIDDEN_CLI_COMMANDS = new Set([
+  "heapdump",
+  "color",
+  "focus",
+  "workflow-launch-exec",
+]);
+
+const CLI_COMMAND_DESCRIPTIONS = {
+  agents: "فهرست subagentهای تعریف‌شده",
+  "list-agents": "فهرست subagentهای تعریف‌شده",
+  config: "نمایش تنظیمات Claude Code",
+  context: "نمایش مصرف context گفتگو به تفکیک بخش‌ها",
+  effort: "تغییر سطح استدلال در خود Claude Code",
+  "extra-usage": "مصرف اضافه بر سهمیه",
+  fast: "روشن/خاموش‌کردن حالت سریع",
+  import: "وارد کردن تنظیمات و حافظه از ابزار دیگر",
+  init: "ساخت CLAUDE.md با مستندات این مخزن",
+  insights: "گزارش تحلیلی از جلسه‌های Claude Code",
+  mcp: "وضعیت سرورهای MCP",
+  "output-style": "تغییر سبک خروجی پاسخ‌ها",
+  recap: "خلاصهٔ کارهای انجام‌شده در این گفتگو",
+  "reload-plugins": "بارگذاری دوبارهٔ پلاگین‌ها",
+  "reload-skills": "بارگذاری دوبارهٔ مهارت‌ها",
+  "security-review": "بازبینی امنیتی تغییرات شاخهٔ فعلی",
+  "usage-credits": "اعتبار باقی‌ماندهٔ حساب",
+};
+
+export function cliCommandEntries(names, { exclude = new Set() } = {}) {
+  const entries = [];
+  for (const raw of names || []) {
+    const name = String(raw || "");
+    const key = name.toLowerCase();
+    if (!name || name.startsWith("_") || HIDDEN_CLI_COMMANDS.has(key) || exclude.has(key)) continue;
+    entries.push({
+      description: CLI_COMMAND_DESCRIPTIONS[key] || "",
+      kind: "cli",
+      name,
+      scope: name.includes(":") ? "plugin" : "cli",
+    });
+  }
+  return entries;
 }

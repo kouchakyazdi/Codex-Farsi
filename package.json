@@ -30,7 +30,7 @@
   "scripts": {
     "start": "node server.mjs",
     "start:no-open": "node server.mjs --no-open",
-    "check": "node --check server.mjs && node --check remote-access.mjs && node --check web-data-store.mjs && node --check providers/claude-provider.mjs && node --check public/app.js && node --check public/share.js && node --check public/markdown.js",
+    "check": "node --check server.mjs && node --check remote-access.mjs && node --check web-data-store.mjs && node --check providers/claude-provider.mjs && node --check providers/claude-profiles.mjs && node --check public/app.js && node --check public/share.js && node --check public/markdown.js",
     "test": "node --test"
   },
   "devDependencies": {

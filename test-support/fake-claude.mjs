@@ -54,6 +54,7 @@ process.stdin.on("end", () => {
     subtype: "init",
     session_id: sessionId,
     model: "sonnet",
+    slash_commands: ["clear", "init", "heapdump", "anthropic-skills:pdf", "__internal"],
   });
   emit({
     type: "stream_event",

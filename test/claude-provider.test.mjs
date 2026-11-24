@@ -659,3 +659,78 @@ test("an active goal is restated to the CLI and accumulates progress", async (t)
   const restored = await restarted.rpc("thread/goal/get", { threadId: thread.id });
   assert.equal(restored.goal.objective, "دوباره");
 });
+
+test("a conversation started here adopts the title Claude writes to its transcript", async (t) => {
+  const root = await mkdtemp(join(os.tmpdir(), "codex-web-claude-title-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  configureFake(t, root);
+  const events = [];
+  const provider = new ClaudeProvider(providerOptions(root, events));
+  await provider.load();
+
+  const started = await provider.rpc("thread/start", { cwd: root });
+  const id = started.thread.id.replace(/^claude:/, "");
+  assert.equal(started.thread.name, "گفتگوی Claude");
+
+  // Claude Code writes the session file; only native threads used to read it.
+  const projectDir = join(root, "claude-config", "projects", "project");
+  await mkdir(projectDir, { recursive: true });
+  await writeFile(
+    join(projectDir, `${id}.jsonl`),
+    [
+      JSON.stringify({
+        type: "user",
+        uuid: "user",
+        cwd: root,
+        timestamp: "2026-07-27T00:00:00.000Z",
+        message: { content: "رفع باگ احراز هویت" },
+      }),
+      JSON.stringify({ type: "ai-title", aiTitle: "رفع باگ لاگین در سرویس auth" }),
+    ].join("\n") + "\n",
+  );
+
+  await provider.rpc("turn/start", {
+    threadId: `claude:${id}`,
+    input: [{ type: "text", text: "رفع باگ احراز هویت" }],
+  });
+  await waitForTurn(provider, `claude:${id}`, "completed");
+
+  const listed = await provider.rpc("thread/list", { limit: 10 });
+  const thread = listed.data.find((candidate) => candidate.id === `claude:${id}`);
+  assert.equal(thread.name, "رفع باگ لاگین در سرویس auth");
+  assert.ok(
+    events.some(
+      (event) =>
+        event.method === "thread/name/updated" &&
+        event.params.name === "رفع باگ لاگین در سرویس auth",
+    ),
+    "renaming should be announced so the open conversation updates",
+  );
+  await provider.stop();
+});
+
+test("adopting a transcript title never overwrites a name the user chose", async (t) => {
+  const root = await mkdtemp(join(os.tmpdir(), "codex-web-claude-title-keep-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const provider = new ClaudeProvider(providerOptions(root));
+  await provider.load();
+
+  const started = await provider.rpc("thread/start", { cwd: root });
+  const id = started.thread.id.replace(/^claude:/, "");
+  await provider.rpc("thread/setName", {
+    threadId: `claude:${id}`,
+    name: "نام دستی",
+  });
+
+  const projectDir = join(root, "claude-config", "projects", "project");
+  await mkdir(projectDir, { recursive: true });
+  await writeFile(
+    join(projectDir, `${id}.jsonl`),
+    `${JSON.stringify({ type: "ai-title", aiTitle: "عنوان خودکار" })}\n`,
+  );
+
+  const listed = await provider.rpc("thread/list", { limit: 10 });
+  const thread = listed.data.find((candidate) => candidate.id === `claude:${id}`);
+  assert.equal(thread.name, "نام دستی");
+  await provider.stop();
+});

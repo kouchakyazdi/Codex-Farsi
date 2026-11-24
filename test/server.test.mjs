@@ -320,12 +320,28 @@ test("Claude provider supports sessions, streaming, resume, and merged thread li
   const nativeTranscriptPath = join(nativeProjectDir, `${nativeSessionId}.jsonl`);
   const argsFile = join(temporaryRoot, "claude-args.json");
   const messagesFile = join(temporaryRoot, "claude-messages.ndjson");
+  const profileHome = join(temporaryRoot, "torob-home");
+  const profileArgsFile = join(temporaryRoot, "torob-args.json");
+  const profilesFile = join(temporaryRoot, "claude-profiles.json");
   const port = await freePort();
   const baseUrl = `http://127.0.0.1:${port}`;
 
   await chmod(FAKE_CODEX, 0o755);
   await chmod(FAKE_CLAUDE, 0o755);
   await mkdir(nativeProjectDir, { recursive: true });
+  await mkdir(profileHome, { recursive: true });
+  await writeFile(
+    profilesFile,
+    JSON.stringify([
+      {
+        id: "torob",
+        label: "Torob",
+        bin: FAKE_CLAUDE,
+        configDir: profileHome,
+        env: { FAKE_CLAUDE_ARGS_FILE: profileArgsFile },
+      },
+    ]),
+  );
   await writeFile(
     nativeTranscriptPath,
     [
@@ -355,8 +371,12 @@ test("Claude provider supports sessions, streaming, resume, and merged thread li
       CODEX_BIN: FAKE_CODEX,
       CLAUDE_BIN: FAKE_CLAUDE,
       CODEX_WEB_CWD: temporaryRoot,
+      // CLAUDE_CONFIG_DIR wins over CLAUDE_HOME, so an inherited one (a shell
+      // running under a non-default Claude profile) must not leak in.
+      CLAUDE_CONFIG_DIR: claudeHome,
       CLAUDE_HOME: claudeHome,
       CLAUDE_WEB_DATA_DIR: claudeDataDir,
+      CODEX_WEB_CLAUDE_PROFILES: profilesFile,
       CODEX_WEB_PORT: String(port),
       XDG_CACHE_HOME: cacheHome,
       FAKE_CLAUDE_ARGS_FILE: argsFile,
@@ -454,4 +474,48 @@ test("Claude provider supports sessions, streaming, resume, and merged thread li
   });
   const nativeArgs = JSON.parse(await readFile(argsFile, "utf8"));
   assert.equal(nativeArgs.includes("--resume"), true);
+
+  // The command list the CLI reported on its run is offered in the composer.
+  const commandList = await (
+    await fetch(`${baseUrl}/api/agent-commands?provider=claude&cwd=${encodeURIComponent(temporaryRoot)}`)
+  ).json();
+  const listed = commandList.commands.map((command) => command.name);
+  assert.ok(listed.includes("init"));
+  assert.ok(listed.includes("anthropic-skills:pdf"));
+  assert.ok(!listed.includes("heapdump") && !listed.includes("__internal"));
+  // A profile that has not run yet falls back to the headless built-ins.
+  const profileCommands = await (
+    await fetch(`${baseUrl}/api/agent-commands?provider=torob&cwd=${encodeURIComponent(temporaryRoot)}`)
+  ).json();
+  assert.equal(profileCommands.provider, "torob");
+  assert.ok(profileCommands.commands.some((command) => command.name === "security-review"));
+  assert.ok(!profileCommands.commands.some((command) => command.name === "anthropic-skills:pdf"));
+
+  // A configured profile is its own provider: own ids, own env, own transcripts.
+  const status = await (await fetch(`${baseUrl}/api/status`)).json();
+  assert.deepEqual(Object.keys(status.providers), ["codex", "claude", "torob"]);
+  assert.equal(status.providers.torob.label, "Torob");
+  assert.equal(status.providers.torob.family, "claude");
+
+  const profileThread = await rpc("thread/start", { provider: "torob", cwd: temporaryRoot });
+  const profileThreadId = profileThread.thread.id;
+  assert.match(profileThreadId, /^torob:/);
+  assert.equal(profileThread.thread.provider, "torob");
+  // No `provider` param: the thread id prefix alone routes the request.
+  await rpc("turn/start", { threadId: profileThreadId, input: [{ type: "text", text: "سلام" }] });
+  await waitFor(async () => {
+    const result = await rpc("thread/read", { threadId: profileThreadId });
+    return result.thread.turns.at(-1)?.status === "completed";
+  });
+  assert.equal(Array.isArray(JSON.parse(await readFile(profileArgsFile, "utf8"))), true);
+
+  const mergedWithProfile = await rpc("thread/list");
+  const profileListed = mergedWithProfile.data.find((thread) => thread.id === profileThreadId);
+  assert.equal(profileListed?.provider, "torob");
+  assert.equal(mergedWithProfile.data.some((thread) => thread.id === threadId), true);
+  assert.equal(
+    mergedWithProfile.data.some((thread) => thread.id === `torob:${nativeSessionId}`),
+    false,
+    "the profile must not discover the default profile's transcripts",
+  );
 });

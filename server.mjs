@@ -9,8 +9,13 @@ import { randomUUID } from "node:crypto";
 import { dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import os from "node:os";
-import { listAgentCommandsCached } from "./agent-commands.mjs";
+import {
+  CLAUDE_FALLBACK_CLI_COMMANDS,
+  cliCommandEntries,
+  listAgentCommandsCached,
+} from "./agent-commands.mjs";
 import { ClaudeProvider } from "./providers/claude-provider.mjs";
+import { defaultProfilesPath, loadClaudeProfiles } from "./providers/claude-profiles.mjs";
 import {
   authorizeRequest,
   defaultTailscaleBinary,
@@ -65,7 +70,10 @@ Environment:
                             prompts (default: ~/.codex)
   CLAUDE_CONFIG_DIR         Claude Code config/session directory, source of
                             Claude skills and commands (default: ~/.claude)
-  CLAUDE_WEB_DATA_DIR       Claude Web conversation metadata directory`);
+  CLAUDE_WEB_DATA_DIR       Claude Web conversation metadata directory
+  CODEX_WEB_CLAUDE_PROFILES JSON file of extra Claude Code profiles, each shown
+                            as its own provider (default:
+                            ~/.config/codex-web/claude-profiles.json)`);
   process.exit(0);
 }
 
@@ -144,6 +152,7 @@ const RPC_ALLOWLIST = new Set([
   "thread/unarchive",
   "thread/compact/start",
   "thread/setName",
+  "thread/name/set",
   "thread/goal/set",
   "thread/goal/get",
   "thread/goal/clear",
@@ -759,13 +768,36 @@ class CodexBridge {
 
 const bridge = new CodexBridge();
 const webData = new WebDataStore(WEB_DATA_DIR);
-const claudeProvider = new ClaudeProvider({
-  binary: CLAUDE_BIN,
-  cacheDir: CLAUDE_DATA_DIR,
-  claudeConfigDir: CLAUDE_CONFIG_DIR,
-  emit: (message) => broadcast("rpc", message),
-  log: (message) => broadcast("log", { level: "stderr", message }),
+const CLAUDE_PROFILES = await loadClaudeProfiles({
+  path: defaultProfilesPath(),
+  defaultBinary: CLAUDE_BIN,
+}).catch((error) => {
+  console.error(`Ignoring Claude profiles: ${error.message}`);
+  return [];
 });
+// Every Claude-family provider, keyed by id: the default `claude` plus one per
+// configured profile. They share one implementation and differ only in config.
+const claudeProviders = new Map(
+  [
+    { id: "claude", label: "Claude", binary: CLAUDE_BIN, configDir: CLAUDE_CONFIG_DIR, env: {} },
+    ...CLAUDE_PROFILES,
+  ].map((profile) => [
+    profile.id,
+    new ClaudeProvider({
+      id: profile.id,
+      label: profile.label,
+      env: profile.env,
+      binary: profile.binary,
+      cacheDir:
+        profile.id === "claude"
+          ? CLAUDE_DATA_DIR
+          : join(CACHE_HOME, "codex-web", "claude-profiles", profile.id),
+      claudeConfigDir: profile.configDir,
+      emit: (message) => broadcast("rpc", message),
+      log: (message) => broadcast("log", { level: "stderr", message }),
+    }),
+  ]),
+);
 const remoteAccess = REMOTE_ENABLED
   ? new TailscaleRemoteAccess({
       localPort: PORT,
@@ -783,12 +815,20 @@ const remoteAccess = REMOTE_ENABLED
   : null;
 
 function providerForRequest(method, params = {}) {
-  if (params.provider === "claude") return "claude";
   if (params.provider === "codex") return "codex";
-  if (typeof params.threadId === "string" && params.threadId.startsWith("claude:")) {
-    return "claude";
+  if (claudeProviders.has(params.provider)) return params.provider;
+  if (typeof params.threadId === "string") {
+    const prefix = params.threadId.split(":", 1)[0];
+    if (params.threadId.includes(":") && claudeProviders.has(prefix)) return prefix;
   }
   return method === "thread/list" ? "all" : "codex";
+}
+
+// Ordered as the UI lists them: Codex first, then each Claude profile.
+async function providerStatuses() {
+  const statuses = { codex: { ready: bridge.ready, binary: CODEX_BIN, label: "Codex", family: "codex" } };
+  for (const [id, provider] of claudeProviders) statuses[id] = await provider.status();
+  return statuses;
 }
 
 function withoutProvider(params = {}) {
@@ -799,8 +839,8 @@ function withoutProvider(params = {}) {
 
 async function providerRpc(method, params = {}) {
   const provider = providerForRequest(method, params);
-  if (provider === "claude") {
-    return claudeProvider.rpc(method, withoutProvider(params));
+  if (claudeProviders.has(provider)) {
+    return claudeProviders.get(provider).rpc(method, withoutProvider(params));
   }
   await bridge.start();
   return bridge.rpc(method, applyCliThreadDefaults(method, withoutProvider(params)));
@@ -809,12 +849,16 @@ async function providerRpc(method, params = {}) {
 async function listAllThreads(params = {}) {
   const results = await Promise.allSettled([
     providerRpc("thread/list", { ...params, provider: "codex" }),
-    claudeProvider.rpc("thread/list", withoutProvider(params)),
+    ...[...claudeProviders.values()].map((provider) =>
+      provider.rpc("thread/list", withoutProvider(params)),
+    ),
   ]);
-  const codex = results[0].status === "fulfilled" ? results[0].value : { data: [] };
-  const claude = results[1].status === "fulfilled" ? results[1].value : { data: [] };
+  const listed = results.map((result) =>
+    result.status === "fulfilled" ? result.value : { data: [] },
+  );
+  const [codex, ...claudeLists] = listed;
   if (results.every((result) => result.status === "rejected")) {
-    throw results[0].reason || results[1].reason;
+    throw results[0].reason;
   }
   return {
     data: [
@@ -823,7 +867,7 @@ async function listAllThreads(params = {}) {
         provider: thread.provider || "codex",
         providerThreadId: thread.providerThreadId || thread.id,
       })),
-      ...(claude.data || []),
+      ...claudeLists.flatMap((list) => list.data || []),
     ].sort(
       (left, right) => (right.updatedAt || 0) - (left.updatedAt || 0),
     ),
@@ -877,7 +921,6 @@ const server = createServer(async (req, res) => {
     const url = new URL(req.url || "/", `http://${req.headers.host || `${HOST}:${PORT}`}`);
 
     if (req.method === "GET" && url.pathname === "/api/events") {
-      const claudeStatus = await claudeProvider.status();
       res.writeHead(200, {
         "Content-Type": "text/event-stream; charset=utf-8",
         "Cache-Control": "no-cache, no-transform",
@@ -887,10 +930,7 @@ const server = createServer(async (req, res) => {
       res.write(`retry: 1000\nevent: status\ndata: ${JSON.stringify({
         ready: bridge.ready,
         message: bridge.ready ? "connected" : "starting",
-        providers: {
-          codex: { ready: bridge.ready, binary: CODEX_BIN },
-          claude: claudeStatus,
-        },
+        providers: await providerStatuses(),
         remote: remoteAccess?.status() || { enabled: false, ready: false, url: null },
       })}\n\n`);
       res.write(
@@ -904,15 +944,11 @@ const server = createServer(async (req, res) => {
     }
 
     if (req.method === "GET" && url.pathname === "/api/status") {
-      const claudeStatus = await claudeProvider.status();
       return json(res, 200, {
         ready: bridge.ready,
         codexBin: CODEX_BIN,
         claudeBin: CLAUDE_BIN,
-        providers: {
-          codex: { ready: bridge.ready, binary: CODEX_BIN },
-          claude: claudeStatus,
-        },
+        providers: await providerStatuses(),
         cwd: DEFAULT_CWD,
         port: PORT,
         remote: remoteAccess?.status() || { enabled: false, ready: false, url: null },
@@ -920,10 +956,26 @@ const server = createServer(async (req, res) => {
     }
 
     if (req.method === "GET" && url.pathname === "/api/agent-commands") {
-      const provider = url.searchParams.get("provider") === "claude" ? "claude" : "codex";
+      const requested = url.searchParams.get("provider");
+      const provider = claudeProviders.has(requested) ? requested : "codex";
       const requestedCwd = url.searchParams.get("cwd") || "";
       const cwd = isAbsolute(requestedCwd) ? resolve(requestedCwd) : DEFAULT_CWD;
-      const commands = await listAgentCommandsCached({ cwd, provider });
+      const claude = claudeProviders.get(provider);
+      // A copy: the cached list must not grow with the CLI entries below.
+      const commands = [
+        ...(await listAgentCommandsCached({
+          cwd,
+          provider: claude ? "claude" : "codex",
+          claudeConfigDir: claude?.claudeConfigDir,
+        })),
+      ];
+      if (claude) {
+        // Skills and prompt files found on disk keep their richer metadata;
+        // everything else the CLI reported (built-ins, plugin skills) follows.
+        const names = (await claude.cliCommandNames()) || CLAUDE_FALLBACK_CLI_COMMANDS;
+        const exclude = new Set(commands.map((command) => command.name.toLowerCase()));
+        commands.push(...cliCommandEntries(names, { exclude }));
+      }
       return json(res, 200, {
         // `path` stays on the server: the composer only needs name and copy.
         commands: commands.map(({ path, ...command }) => command),
@@ -1148,7 +1200,7 @@ async function shutdown(exitCode = 0) {
   server.closeAllConnections?.();
   await remoteAccess?.stop();
   bridge.stop();
-  await claudeProvider.stop();
+  await Promise.all([...claudeProviders.values()].map((provider) => provider.stop()));
   await serverClosed;
   clearTimeout(forceExit);
   process.exit(exitCode);
